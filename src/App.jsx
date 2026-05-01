@@ -280,6 +280,29 @@ function LogoSekolah({ url, className = "" }) {
   return <img src={src} alt="Logo sekolah" className={className} referrerPolicy="no-referrer" onError={() => setErrCount(c => c + 1)} />;
 }
 
+// Helper kriteria nilai — interval bisa dikustom via KKTP
+// interval: { pb: batas_atas_perlu_bimbingan, bk: batas_atas_berkembang, ck: batas_atas_cakap }
+// Default: Perlu Bimbingan 0-40, Berkembang 41-65, Cakap 66-85, Mahir 86-100
+const DEFAULT_KKTP = { pb: 40, bk: 65, ck: 85 };
+let _kktpGlobal = { ...DEFAULT_KKTP };
+function setKKTPGlobal(interval) { _kktpGlobal = { ...interval }; }
+
+function getKriteria(nilai, interval) {
+  const iv = interval || _kktpGlobal;
+  if (nilai > iv.ck) return "Mahir";
+  if (nilai > iv.bk) return "Cakap";
+  if (nilai > iv.pb) return "Berkembang";
+  return "Perlu Bimbingan";
+}
+
+function getKriteriaStyle(nilai, interval) {
+  const k = getKriteria(nilai, interval);
+  if (k === "Mahir") return { background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac" };
+  if (k === "Cakap") return { background: "#eff6ff", color: "#003082", border: "1px solid #93c5fd" };
+  if (k === "Berkembang") return { background: "#fff7ed", color: "#b45309", border: "1px solid #f59e0b" };
+  return { background: "#fef2f2", color: "#CC0000", border: "1px solid #fca5a5" };
+}
+
 async function unduhPDF({ siswa, hasilAkhir, soalList, jawabanSiswa, namaGuru, nipGuru, kotaTTD, namaSekolah }) {
   if (!window.jspdf) {
     await new Promise((res, rej) => {
@@ -325,7 +348,7 @@ async function unduhPDF({ siswa, hasilAkhir, soalList, jawabanSiswa, namaGuru, n
   });
   y += 4;
   checkY(32);
-  const predikat = hasilAkhir.nilai >= 90 ? "Sangat Baik" : hasilAkhir.nilai >= 75 ? "Baik" : hasilAkhir.nilai >= 60 ? "Cukup" : "Perlu Bimbingan";
+  const predikat = getKriteria(hasilAkhir.nilai);
   const nilaiRGB = hasilAkhir.nilai >= 75 ? [22,163,74] : hasilAkhir.nilai >= 50 ? [217,119,6] : [220,38,38];
   doc.setDrawColor(...nilaiRGB); doc.setLineWidth(0.8);
   doc.roundedRect(margin, y, colW, 28, 3, 3, "D");
@@ -606,12 +629,16 @@ async function fetchAsesmenList() {
   const d = await FS.getAllAsesmen();
   return d.status === "success" ? d.data : [...DEFAULT_ASESMEN];
 }
-async function fetchKKM() {
-  const d = await FS.getKKM();
-  return d.status === "success" ? d.data : {};
+async function fetchKKTP() {
+  try {
+    const d = await FS.getKKM(); // reuse endpoint yang sama
+    if (d.status === "success" && d.data && d.data.__kktp__) return d.data.__kktp__;
+  } catch {}
+  return { pb: 40, bk: 65, ck: 85 }; // default interval
 }
-async function simpanKKM(kkmData) {
-  const d = await FS.simpanKKM({ kkm: kkmData });
+async function simpanKKTP(interval) {
+  // Simpan sebagai key __kktp__ dalam struktur KKM yang sama
+  const d = await FS.simpanKKM({ kkm: { __kktp__: interval } });
   return d.status === "success";
 }
 
@@ -856,31 +883,39 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
   const [tokenValue, setTokenValue] = useState("");
   const [daftarToken, setDaftarToken] = useState([]);
   const [loadToken, setLoadToken] = useState(false);
-  const [kkmData, setKkmData] = useState({});
-  const [kkmLoading, setKkmLoading] = useState(false);
-  const [kkmSaving, setKkmSaving] = useState(false);
+  // KKTP global
+  const [kktp, setKktp] = useState({ pb: 40, bk: 65, ck: 85 });
+  const [kktpLoading, setKktpLoading] = useState(false);
+  const [kktpSaving, setKktpSaving] = useState(false);
   // Modal edit token
-  const [editModal, setEditModal] = useState(null); // { mapel, asesmen, token }
+  const [editModal, setEditModal] = useState(null);
   const [editTokenValue, setEditTokenValue] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
-  const loadKKM = async () => {
-    setKkmLoading(true);
-    const data = await fetchKKM();
-    setKkmData(data);
-    setKkmLoading(false);
+  const loadKKTP = async () => {
+    setKktpLoading(true);
+    const data = await fetchKKTP();
+    setKktp(data);
+    setKKTPGlobal(data);
+    setKktpLoading(false);
   };
-  useEffect(() => { loadKKM(); }, []);
+  useEffect(() => { loadKKTP(); }, []);
 
-  const handleKKMChange = (mapel, value) => {
-    setKkmData(prev => ({ ...prev, [mapel]: value === "" ? "" : Number(value) }));
+  const handleKKTPChange = (key, value) => {
+    const v = value === "" ? "" : Number(value);
+    setKktp(prev => ({ ...prev, [key]: v }));
   };
-  const handleSaveKKM = async () => {
-    setKkmSaving(true);
-    const success = await simpanKKM(kkmData);
-    if (success) addToast("KKM berhasil disimpan!", "success");
-    else addToast("Gagal menyimpan KKM", "error");
-    setKkmSaving(false);
+
+  const handleSaveKKTP = async () => {
+    // Validasi urutan
+    if (kktp.pb >= kktp.bk || kktp.bk >= kktp.ck) {
+      return addToast("Interval harus berurutan: Perlu Bimbingan < Berkembang < Cakap < Mahir", "error");
+    }
+    setKktpSaving(true);
+    const success = await simpanKKTP(kktp);
+    if (success) { setKKTPGlobal(kktp); addToast("KKTP berhasil disimpan!", "success"); }
+    else addToast("Gagal menyimpan KKTP", "error");
+    setKktpSaving(false);
   };
 
   const handleTambahMapel = async () => {
@@ -894,7 +929,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
         setNewMapel("");
         const newMapels = await fetchMapelList();
         setMapelList(newMapels);
-        loadKKM();
+        loadKKTP();
       } else addToast(d.message, "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
   };
@@ -907,7 +942,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
         addToast(`Mapel "${m}" dihapus.`, "success");
         const newMapels = await fetchMapelList();
         setMapelList(newMapels);
-        loadKKM();
+        loadKKTP();
       } else addToast(d.message, "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
   };
@@ -1051,22 +1086,50 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
         </div>
       </div>
 
-      {/* KKM Settings */}
+      {/* KKTP Settings */}
       <div className="bg-white p-5 space-y-4" style={{ border: "1px solid #e2e8f0", borderTop: "3px solid #16a34a", borderRadius: "0" }}>
-        <h3 className="font-bold uppercase tracking-wide text-sm" style={{ color: "#15803d" }}>🎯 Nilai Ketuntasan Minimal (KKM) per Mapel</h3>
-        {kkmLoading ? <p className="text-xs text-slate-400">Memuat KKM...</p> : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {mapelList.map(mapel => (
-              <div key={mapel} className="flex items-center gap-2">
-                <label className="text-xs font-medium text-slate-600 w-32 truncate">{mapel}</label>
-                <input type="number" min={0} max={100} value={kkmData[mapel] !== undefined ? kkmData[mapel] : ""} onChange={e => handleKKMChange(mapel, e.target.value)} placeholder="75" className="w-20 border-2 border-slate-200 px-2 py-1 text-sm text-center" style={{ borderRadius: "0" }} />
-                <span className="text-xs text-slate-400">(default 75)</span>
-              </div>
-            ))}
+        <div>
+          <h3 className="font-bold uppercase tracking-wide text-sm" style={{ color: "#15803d" }}>🎯 Kriteria Ketercapaian Tujuan Pembelajaran (KKTP)</h3>
+          <p className="text-xs text-slate-500 mt-1">Atur batas atas setiap level — berlaku untuk <strong>semua mata pelajaran</strong>. Nilai di atas batas tertinggi = Mahir.</p>
+        </div>
+        {kktpLoading ? <p className="text-xs text-slate-400">Memuat KKTP...</p> : (
+          <div className="space-y-3">
+            {/* Visualisasi rentang */}
+            <div className="flex rounded overflow-hidden text-xs font-bold text-white text-center" style={{ height: "28px" }}>
+              <div style={{ flex: kktp.pb, background: "#CC0000" }} className="flex items-center justify-center truncate px-1">Perlu Bimbingan<br/>0–{kktp.pb}</div>
+              <div style={{ flex: kktp.bk - kktp.pb, background: "#d97706" }} className="flex items-center justify-center truncate px-1">Berkembang<br/>{kktp.pb+1}–{kktp.bk}</div>
+              <div style={{ flex: kktp.ck - kktp.bk, background: "#003082" }} className="flex items-center justify-center truncate px-1">Cakap<br/>{kktp.bk+1}–{kktp.ck}</div>
+              <div style={{ flex: 100 - kktp.ck, background: "#16a34a" }} className="flex items-center justify-center truncate px-1">Mahir<br/>{kktp.ck+1}–100</div>
+            </div>
+
+            {/* Input batas atas per level */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[
+                { key: "pb", label: "Batas Atas Perlu Bimbingan", color: "#CC0000", desc: "0 – nilai ini" },
+                { key: "bk", label: "Batas Atas Berkembang", color: "#d97706", desc: `${kktp.pb+1} – nilai ini` },
+                { key: "ck", label: "Batas Atas Cakap", color: "#003082", desc: `${kktp.bk+1} – nilai ini` },
+              ].map(({ key, label, color, desc }) => (
+                <div key={key}>
+                  <label className="text-xs font-semibold block mb-1" style={{ color }}>{label}</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min={1} max={99}
+                      value={kktp[key]}
+                      onChange={e => handleKKTPChange(key, e.target.value)}
+                      className="w-20 border-2 px-2 py-1.5 text-sm text-center font-bold focus:outline-none"
+                      style={{ borderColor: color, borderRadius: "0", color }}
+                    />
+                    <span className="text-xs text-slate-400">{desc}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-slate-400 bg-slate-50 px-3 py-2" style={{ borderLeft: "3px solid #16a34a" }}>
+              <strong>Mahir:</strong> {kktp.ck + 1} – 100 &nbsp;|&nbsp; Pastikan nilai berurutan: Perlu Bimbingan &lt; Berkembang &lt; Cakap.
+            </div>
           </div>
         )}
-        <button onClick={handleSaveKKM} disabled={kkmSaving} className={btn("green") + " w-full md:w-auto"}>{kkmSaving ? "Menyimpan..." : "💾 Simpan KKM"}</button>
-        <p className="text-xs text-slate-500">* KKM digunakan untuk menentukan "Tuntas" / "Belum Tuntas" di halaman Rekap Hasil.</p>
+        <button onClick={handleSaveKKTP} disabled={kktpSaving} className={btn("green") + " w-full md:w-auto"}>{kktpSaving ? "Menyimpan..." : "💾 Simpan KKTP"}</button>
       </div>
 
       <div className="p-3 text-xs" style={{ background: "#f0fdf4", border: "1px solid #86efac", borderLeft: "4px solid #16a34a", borderRadius: "0", color: "#15803d" }}>✅ Mapel dan asesmen kustom otomatis tersedia di login, input soal, dan rekap hasil.</div>
@@ -1141,6 +1204,20 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
 function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..." }) {
   const editorRef = useRef(null);
   const [isFocused, setIsFocused] = useState(false);
+  const [showListMenu, setShowListMenu] = useState(false);
+  const [showAlignMenu, setShowAlignMenu] = useState(false);
+  const listMenuRef = useRef(null);
+  const alignMenuRef = useRef(null);
+
+  // Tutup popup saat klik di luar
+  useEffect(() => {
+    const handler = (e) => {
+      if (listMenuRef.current && !listMenuRef.current.contains(e.target)) setShowListMenu(false);
+      if (alignMenuRef.current && !alignMenuRef.current.contains(e.target)) setShowAlignMenu(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
   // Inisialisasi editor saat mount
   useEffect(() => {
@@ -1159,10 +1236,8 @@ function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..."
     if (e.key === "Enter") {
       const selection = window.getSelection();
       if (!selection.rangeCount) return;
-      
       const node = selection.getRangeAt(0).startContainer;
       const isInList = node.parentElement?.closest?.("li") || node.closest?.("li");
-      
       if (isInList) {
         e.preventDefault();
         document.execCommand("insertParagraph", false);
@@ -1171,9 +1246,7 @@ function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..."
           if (newSelection.rangeCount) {
             const newNode = newSelection.getRangeAt(0).startContainer;
             const newLi = newNode.parentElement?.closest?.("li");
-            if (newLi && newLi.innerText.trim() === "") {
-              newLi.remove();
-            }
+            if (newLi && newLi.innerText.trim() === "") newLi.remove();
           }
         }, 10);
       }
@@ -1186,52 +1259,131 @@ function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..."
     editorRef.current?.focus();
   };
 
-  const insertFormula = () => {
-    const formula = prompt("Masukkan formula LaTeX (contoh: \\frac{1}{2} atau \\sqrt{x})", "\\frac{}{}");
-    if (formula) {
-      document.execCommand("insertText", false, `$${formula}$`);
-      handleInput();
-      editorRef.current?.focus();
+  const handleFontSize = (size) => {
+    // execCommand fontSize hanya mendukung 1-7; kita pakai span style
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) { editorRef.current?.focus(); return; }
+    const span = document.createElement("span");
+    span.style.fontSize = size + "pt";
+    try {
+      range.surroundContents(span);
+    } catch {
+      // Jika selection multi-node, fallback ke execCommand
+      document.execCommand("fontSize", false, "7");
+      // Ganti font-size yang dihasilkan browser
+      editorRef.current?.querySelectorAll("font[size='7']").forEach(el => {
+        el.removeAttribute("size");
+        el.style.fontSize = size + "pt";
+      });
     }
-  };
-
-  const handleBlur = () => {
-    setIsFocused(false);
     handleInput();
+    editorRef.current?.focus();
   };
 
-  const handleFocus = () => {
-    setIsFocused(true);
+  const handleFont = (font) => {
+    execCommand("fontName", font);
   };
 
-  // Cek apakah ada formula untuk menampilkan preview
-  const hasFormula = () => {
-    return value && /\$[^$]+\$/.test(value);
-  };
+  const handleBlur = () => { setIsFocused(false); handleInput(); };
+  const handleFocus = () => setIsFocused(true);
 
-  // Hilangkan tag HTML untuk preview teks biasa
-  const stripHtml = (html) => {
-    const temp = document.createElement("div");
-    temp.innerHTML = html;
-    return temp.textContent || temp.innerText || "";
-  };
-
+  const hasFormula = () => value && /\$[^$]+\$/.test(value);
+  const stripHtml = (html) => { const t = document.createElement("div"); t.innerHTML = html; return t.textContent || t.innerText || ""; };
   const plainText = stripHtml(value || "");
-
-  // Cek apakah editor kosong (hanya berisi <br> atau kosong)
   const isEmpty = !value || value === "<br>" || value === "";
 
   return (
     <div className="space-y-2">
       <div className="border-2 border-slate-200 rounded-xl overflow-hidden focus-within:border-blue-500 transition-colors relative">
-        <div className="bg-slate-50 border-b border-slate-200 px-2 py-1.5 flex flex-wrap gap-1">
+        {/* TOOLBAR */}
+        <div className="bg-slate-50 border-b border-slate-200 px-2 py-1 flex flex-wrap gap-1 items-center">
+          
+          {/* Bold & Italic */}
           <button type="button" onClick={() => execCommand("bold")} className="p-1.5 rounded hover:bg-slate-200 text-slate-600 font-bold" title="Bold"><span className="font-bold text-sm">B</span></button>
-          <button type="button" onClick={() => execCommand("italic")} className="p-1.5 rounded hover:bg-slate-200 text-slate-600 italic" title="Italic"><span className="italic text-sm">I</span></button>
-          <div className="w-px h-6 bg-slate-300 mx-1 self-center" />
-          <button type="button" onClick={() => execCommand("insertOrderedList")} className="p-1.5 rounded hover:bg-slate-200 text-slate-600" title="Numbered List"><span className="text-sm">1. List</span></button>
-          <button type="button" onClick={() => execCommand("insertUnorderedList")} className="p-1.5 rounded hover:bg-slate-200 text-slate-600" title="Bullet List"><span className="text-sm">• List</span></button>
-          <div className="w-px h-6 bg-slate-300 mx-1 self-center" />
-          <button type="button" onClick={insertFormula} className="p-1.5 rounded hover:bg-blue-100 text-blue-600 font-mono" title="Insert Formula"><span className="text-sm font-bold">∑ Formula</span></button>
+          <button type="button" onClick={() => execCommand("italic")} className="p-1.5 rounded hover:bg-slate-200 text-slate-600" title="Italic"><span className="italic text-sm">I</span></button>
+
+          <div className="w-px h-5 bg-slate-300 mx-0.5 self-center" />
+
+          {/* Font Arial */}
+          <button type="button" onClick={() => handleFont("Arial")} className="px-2 py-1 rounded hover:bg-slate-200 text-slate-600 text-xs font-medium" title="Font Arial" style={{ fontFamily: "Arial" }}>Arial</button>
+
+          <div className="w-px h-5 bg-slate-300 mx-0.5 self-center" />
+
+          {/* Ukuran Teks Dropdown */}
+          <select
+            title="Ukuran Tulisan"
+            onChange={e => { if (e.target.value) { handleFontSize(e.target.value); e.target.value = ""; } }}
+            defaultValue=""
+            className="text-xs px-1 py-1 rounded border border-slate-200 bg-white text-slate-600 hover:border-slate-400 focus:outline-none cursor-pointer"
+            style={{ maxWidth: "58px" }}
+          >
+            <option value="" disabled>Ukuran</option>
+            {[10, 11, 12, 13, 14].map(s => <option key={s} value={s}>{s}pt</option>)}
+          </select>
+
+          <div className="w-px h-5 bg-slate-300 mx-0.5 self-center" />
+
+          {/* List — popup kecil */}
+          <div className="relative" ref={listMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowListMenu(v => !v)}
+              className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-200 text-slate-600 text-xs font-medium"
+              title="List"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.5" fill="currentColor" stroke="none"/></svg>
+              <span>List</span>
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            {showListMenu && (
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 shadow-lg rounded-lg overflow-hidden" style={{ minWidth: "140px" }}>
+                <button type="button" onClick={() => { execCommand("insertOrderedList"); setShowListMenu(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="7" style={{fontSize:"7px",fill:"currentColor",stroke:"none"}}>1.</text><text x="2" y="13" style={{fontSize:"7px",fill:"currentColor",stroke:"none"}}>2.</text><text x="2" y="19" style={{fontSize:"7px",fill:"currentColor",stroke:"none"}}>3.</text></svg>
+                  Penomoran (1, 2, 3)
+                </button>
+                <button type="button" onClick={() => { execCommand("insertUnorderedList"); setShowListMenu(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1.5" fill="currentColor" stroke="none"/></svg>
+                  Bullet (•)
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="w-px h-5 bg-slate-300 mx-0.5 self-center" />
+
+          {/* Rata Teks — popup kecil */}
+          <div className="relative" ref={alignMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowAlignMenu(v => !v)}
+              className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-200 text-slate-600 text-xs font-medium"
+              title="Rata Teks"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+              <span>Rata</span>
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            {showAlignMenu && (
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white border border-slate-200 shadow-lg rounded-lg overflow-hidden" style={{ minWidth: "150px" }}>
+                {[
+                  { label: "Rata Kiri", cmd: "justifyLeft", icon: <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg> },
+                  { label: "Rata Tengah", cmd: "justifyCenter", icon: <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg> },
+                  { label: "Rata Kanan", cmd: "justifyRight", icon: <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/></svg> },
+                  { label: "Rata Kanan-Kiri", cmd: "justifyFull", icon: <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg> },
+                ].map(({ label, cmd, icon }) => (
+                  <button key={cmd} type="button"
+                    onClick={() => { execCommand(cmd); setShowAlignMenu(false); }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 font-medium">
+                    {icon}{label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         
         <div
@@ -1247,23 +1399,138 @@ function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..."
         
         {/* Placeholder hanya muncul saat kosong dan tidak fokus */}
         {isEmpty && !isFocused && (
-          <div className="absolute text-slate-400 text-sm px-4 py-3 top-10 left-0 pointer-events-none">
-            {placeholder}
+          <div className="absolute text-slate-400 text-sm px-4 py-3 pointer-events-none" style={{ top: "calc(2rem + 10px)", left: 0 }}>
+            Tulis soal di sini...
           </div>
         )}
       </div>
       
-      {/* Preview menggunakan MathText (sama seperti opsi jawaban) - hanya muncul jika ada formula */}
+      {/* Preview formula */}
       {value && value.trim() !== "" && hasFormula() && (
         <div className="mt-3 p-4 bg-green-50 border border-green-200 rounded-xl">
           <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-2">
             <span className="inline-block w-2 h-2 bg-green-500 rounded-full"></span>
-            Preview Hasil Render:
+            Preview Formula:
           </p>
           <div className="text-sm text-slate-700 bg-white p-3 rounded-lg border border-green-100">
             <MathText text={plainText} />
           </div>
-          <p className="text-xs text-green-600 mt-2 italic">✓ Formula matematika akan tampil seperti ini di halaman siswa</p>
+          <p className="text-xs text-green-600 mt-2 italic">✓ LaTeX $...$ akan di-render saat ujian</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// HELPER: parse opsi yang bisa string lama ATAU object {text,img}
+// ============================================================
+function getOpsiText(o) {
+  if (!o) return "";
+  if (typeof o === "object" && o !== null) return o.text || "";
+  return String(o);
+}
+function getOpsiImg(o) {
+  if (!o) return "";
+  if (typeof o === "object" && o !== null) return o.img || "";
+  return "";
+}
+function makeOpsiObj(text, img) {
+  // Jika tidak ada gambar, simpan string biasa agar backward-compatible
+  if (!img) return text;
+  return { text, img };
+}
+
+// ===== KOMPONEN MINI IMAGE UNTUK OPSI JAWABAN =====
+function OpsiImageInserter({ img, onImgChange, addToast }) {
+  const [mode, setMode] = useState(null); // null | "url" | "upload"
+  const [urlInput, setUrlInput] = useState("");
+  const [compressing, setCompressing] = useState(false);
+  const fileRef = useRef(null);
+
+  const compressToWebP = (file, targetKB = 200) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const image = new Image();
+      image.onload = () => {
+        const MAX_SIDE = 800;
+        let w = image.width, h = image.height;
+        if (w > MAX_SIDE || h > MAX_SIDE) {
+          if (w > h) { h = Math.round(h * MAX_SIDE / w); w = MAX_SIDE; }
+          else { w = Math.round(w * MAX_SIDE / h); h = MAX_SIDE; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(image, 0, 0, w, h);
+        let lo = 0.1, hi = 0.92, best = null;
+        for (let i = 0; i < 7; i++) {
+          const mid = (lo + hi) / 2;
+          const data = canvas.toDataURL("image/webp", mid);
+          const kb = Math.round((data.length * 3) / 4 / 1024);
+          if (kb <= targetKB) { best = data; lo = mid; } else hi = mid;
+        }
+        resolve(best || canvas.toDataURL("image/webp", 0.1));
+      };
+      image.onerror = reject;
+      image.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) return addToast("File harus berupa gambar!", "error");
+    setCompressing(true);
+    try {
+      const webp = await compressToWebP(file, 200);
+      onImgChange(webp);
+      setMode(null);
+      addToast("✅ Gambar opsi dikompres (WebP)", "success");
+    } catch { addToast("Gagal memproses gambar", "error"); }
+    finally { setCompressing(false); e.target.value = ""; }
+  };
+
+  const handleUrl = () => {
+    if (!urlInput.trim()) return addToast("URL tidak boleh kosong!", "error");
+    onImgChange(urlInput.trim());
+    setUrlInput("");
+    setMode(null);
+    addToast("✅ URL gambar opsi disimpan", "success");
+  };
+
+  if (img) {
+    return (
+      <div className="mt-1 flex items-center gap-2">
+        <img src={img} alt="opsi" className="h-12 object-contain border border-slate-200 rounded" style={{ maxWidth: "120px" }} />
+        <button type="button" onClick={() => onImgChange("")} className="text-xs text-red-500 hover:text-red-700 font-bold">✕ Hapus</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-1">
+      {!mode && (
+        <div className="flex gap-1">
+          <button type="button" onClick={() => setMode("upload")} className="text-xs px-2 py-1 font-medium" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #86efac", borderRadius: "0" }}>🖼 Upload</button>
+          <button type="button" onClick={() => setMode("url")} className="text-xs px-2 py-1 font-medium" style={{ background: "#eff6ff", color: "#003082", border: "1px solid #93c5fd", borderRadius: "0" }}>🔗 URL</button>
+        </div>
+      )}
+      {mode === "upload" && (
+        <div className="flex items-center gap-2 mt-1">
+          <input ref={fileRef} type="file" accept="image/*,.webp" onChange={handleFile} className="hidden" />
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={compressing} className="text-xs px-3 py-1 font-medium" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
+            {compressing ? "⏳ Kompres..." : "📁 Pilih File"}
+          </button>
+          <button type="button" onClick={() => setMode(null)} className="text-xs text-slate-400 hover:text-slate-600">Batal</button>
+        </div>
+      )}
+      {mode === "url" && (
+        <div className="flex items-center gap-2 mt-1">
+          <input type="text" value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="https://..." className="flex-1 text-xs px-2 py-1 border border-slate-200 focus:outline-none focus:border-blue-400" style={{ borderRadius: "0" }} />
+          <button type="button" onClick={handleUrl} className="text-xs px-2 py-1 font-bold" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>OK</button>
+          <button type="button" onClick={() => setMode(null)} className="text-xs text-slate-400">✕</button>
         </div>
       )}
     </div>
@@ -1447,9 +1714,10 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
     else setPoint(10);
   };
 
-  const handleOpsiChange = (i, v) => { const a = [...opsi]; a[i] = v; setOpsi(a); };
+  const handleOpsiChange = (i, v) => { const a = [...opsi]; a[i] = makeOpsiObj(v, getOpsiImg(a[i])); setOpsi(a); };
+  const handleOpsiImgChange = (i, img) => { const a = [...opsi]; a[i] = makeOpsiObj(getOpsiText(a[i]), img); setOpsi(a); };
   const handleAddOpsi = () => setOpsi([...opsi, ""]);
-  const handleRemoveOpsi = i => { setOpsi(opsi.filter((_, idx) => idx !== i)); setJawabanBenar(jawabanBenar.filter(j => j !== opsi[i])); };
+  const handleRemoveOpsi = i => { setOpsi(opsi.filter((_, idx) => idx !== i)); setJawabanBenar(jawabanBenar.filter(j => j !== getOpsiText(opsi[i]))); };
   const handleJawabanPG = v => setJawabanBenar([v]);
   const handleJawabanPGK = v => setJawabanBenar(p => p.includes(v) ? p.filter(x => x !== v) : [...p, v]);
   const handleJawabanBS = (idx, val) => { const arr = [...(jawabanBenar.length === opsi.length ? jawabanBenar : opsi.map(() => ""))]; arr[idx] = val; setJawabanBenar(arr); };
@@ -1462,7 +1730,7 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
     const newOpsi = [...opsi];
     lines.forEach((line, i) => {
       const idx = startIdx + i;
-      if (idx < newOpsi.length) newOpsi[idx] = line;
+      if (idx < newOpsi.length) newOpsi[idx] = makeOpsiObj(line, getOpsiImg(newOpsi[idx]));
       else newOpsi.push(line);
     });
     setOpsi(newOpsi);
@@ -1477,14 +1745,14 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
     }
     
     if (jenisSoal !== "Uraian/Esai") {
-      if (opsi.filter(o => o.trim()).length < 2) return addToast("Minimal 2 opsi!", "error");
+      if (opsi.filter(o => getOpsiText(o).trim()).length < 2) return addToast("Minimal 2 opsi!", "error");
       if (jawabanBenar.length === 0) return addToast("Pilih jawaban benar!", "error");
     }
     
     const payload = {
       action: "tambahSoal",
       mapel, asesmen, soal, gambar, jenisSoal,
-      opsi: jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(opsi.filter(o => o.trim())),
+      opsi: jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(opsi.filter(o => getOpsiText(o).trim())),
       jawabanBenar: jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(jawabanBenar),
       jawabanReferensi: jenisSoal === "Uraian/Esai" ? jawabanReferensi : "",
       point: jenisSoal === "Uraian/Esai" ? 0 : Number(point)
@@ -1573,42 +1841,47 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
               </div>
               <button onClick={handleAddOpsi} className="text-xs px-3 py-1 font-medium" style={{ background: "#eff6ff", color: "#003082", borderRadius: "0", border: "1px solid #93c5fd" }}>+ Tambah Opsi</button>
             </div>
-            <div className="space-y-2">
-              {opsi.map((o, i) => (
-                <div key={i} className="flex items-start gap-2">
-                  <span className="w-7 h-7 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-2" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
-                    {String.fromCharCode(65 + i)}
-                  </span>
-                  <div className="flex-1">
-                    <MathInput 
-                      value={o} 
-                      onChange={e => handleOpsiChange(i, e.target.value)} 
-                      onPaste={e => handleOpsiPaste(e, i)} 
-                      rows={1} 
-                      placeholder={`Opsi ${String.fromCharCode(65 + i)}`} 
-                      showToolbar={isMath} 
-                    />
-                    {isMath && o && o.includes("$") && 
-                      <div className="mt-0.5 px-2 py-1 bg-slate-50 rounded-lg text-xs"><MathText text={o} /></div>
+            <div className="space-y-3">
+              {opsi.map((o, i) => {
+                const oText = getOpsiText(o);
+                const oImg = getOpsiImg(o);
+                return (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="w-7 h-7 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-2" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
+                      {String.fromCharCode(65 + i)}
+                    </span>
+                    <div className="flex-1">
+                      <MathInput 
+                        value={oText} 
+                        onChange={e => handleOpsiChange(i, e.target.value)} 
+                        onPaste={e => handleOpsiPaste(e, i)} 
+                        rows={1} 
+                        placeholder={`Opsi ${String.fromCharCode(65 + i)}`} 
+                        showToolbar={isMath} 
+                      />
+                      {isMath && oText && oText.includes("$") && 
+                        <div className="mt-0.5 px-2 py-1 bg-slate-50 rounded-lg text-xs"><MathText text={oText} /></div>
+                      }
+                      <OpsiImageInserter img={oImg} onImgChange={img => handleOpsiImgChange(i, img)} addToast={addToast} />
+                    </div>
+                    {jenisSoal === "Pilihan Ganda" && 
+                      <input type="radio" name="pg" checked={jawabanBenar[0] === oText} onChange={() => handleJawabanPG(oText)} className="w-4 h-4 mt-2.5" />
+                    }
+                    {jenisSoal === "Pilihan Ganda Kompleks" && 
+                      <input type="checkbox" checked={jawabanBenar.includes(oText)} onChange={() => handleJawabanPGK(oText)} className="w-4 h-4 mt-2.5" />
+                    }
+                    {jenisSoal === "Benar/Salah Kompleks" && (
+                      <div className="flex gap-1 flex-shrink-0 mt-1.5">
+                        <button onClick={() => handleJawabanBS(i, "Benar")} className={`text-xs px-2 py-1 font-bold`} style={{ background: jawabanBenar[i] === "Benar" ? "#16a34a" : "#e2e8f0", color: jawabanBenar[i] === "Benar" ? "#fff" : "#475569", borderRadius: "0" }}>B</button>
+                        <button onClick={() => handleJawabanBS(i, "Salah")} className={`text-xs px-2 py-1 font-bold`} style={{ background: jawabanBenar[i] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanBenar[i] === "Salah" ? "#fff" : "#475569", borderRadius: "0" }}>S</button>
+                      </div>
+                    )}
+                    {opsi.length > 2 && 
+                      <button onClick={() => handleRemoveOpsi(i)} className="text-red-400 hover:text-red-600 text-xl mt-1.5">×</button>
                     }
                   </div>
-                  {jenisSoal === "Pilihan Ganda" && 
-                    <input type="radio" name="pg" checked={jawabanBenar[0] === o} onChange={() => handleJawabanPG(o)} className="w-4 h-4 mt-2.5" />
-                  }
-                  {jenisSoal === "Pilihan Ganda Kompleks" && 
-                    <input type="checkbox" checked={jawabanBenar.includes(o)} onChange={() => handleJawabanPGK(o)} className="w-4 h-4 mt-2.5" />
-                  }
-                  {jenisSoal === "Benar/Salah Kompleks" && (
-                    <div className="flex gap-1 flex-shrink-0 mt-1.5">
-                      <button onClick={() => handleJawabanBS(i, "Benar")} className={`text-xs px-2 py-1 font-bold`} style={{ background: jawabanBenar[i] === "Benar" ? "#16a34a" : "#e2e8f0", color: jawabanBenar[i] === "Benar" ? "#fff" : "#475569", borderRadius: "0" }}>B</button>
-                      <button onClick={() => handleJawabanBS(i, "Salah")} className={`text-xs px-2 py-1 font-bold`} style={{ background: jawabanBenar[i] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanBenar[i] === "Salah" ? "#fff" : "#475569", borderRadius: "0" }}>S</button>
-                    </div>
-                  )}
-                  {opsi.length > 2 && 
-                    <button onClick={() => handleRemoveOpsi(i)} className="text-red-400 hover:text-red-600 text-xl mt-1.5">×</button>
-                  }
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -1718,11 +1991,14 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   const setED = (patch) => setEditData(prev => ({ ...prev, ...patch }));
 
   const handleOpsiChange = (i, v) => {
-    const a = [...editData.opsi]; a[i] = v; setED({ opsi: a });
+    const a = [...editData.opsi]; a[i] = makeOpsiObj(v, getOpsiImg(a[i])); setED({ opsi: a });
+  };
+  const handleOpsiImgChange = (i, img) => {
+    const a = [...editData.opsi]; a[i] = makeOpsiObj(getOpsiText(a[i]), img); setED({ opsi: a });
   };
   const handleAddOpsi = () => setED({ opsi: [...editData.opsi, ""] });
   const handleRemoveOpsi = (i) => {
-    const removed = editData.opsi[i];
+    const removed = getOpsiText(editData.opsi[i]);
     setED({
       opsi: editData.opsi.filter((_, idx) => idx !== i),
       jawabanBenar: editData.jawabanBenar.filter(j => j !== removed),
@@ -1747,7 +2023,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   const handleSaveEdit = async () => {
     if (!editData.soal.trim()) return addToast("Soal tidak boleh kosong!", "error");
     if (editData.jenisSoal !== "Uraian/Esai") {
-      if (editData.opsi.filter(o => o.trim()).length < 2) return addToast("Minimal 2 opsi!", "error");
+      if (editData.opsi.filter(o => getOpsiText(o).trim()).length < 2) return addToast("Minimal 2 opsi!", "error");
       if (editData.jawabanBenar.length === 0) return addToast("Pilih jawaban benar!", "error");
     }
     setSaving(true);
@@ -1759,7 +2035,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
         soal: editData.soal,
         gambar: editData.gambar,
         jenisSoal: editData.jenisSoal,
-        opsi: editData.jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(editData.opsi.filter(o => o.trim())),
+        opsi: editData.jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(editData.opsi.filter(o => getOpsiText(o).trim())),
         jawabanBenar: editData.jenisSoal === "Uraian/Esai" ? "[]" : JSON.stringify(editData.jawabanBenar),
         jawabanReferensi: editData.jenisSoal === "Uraian/Esai" ? editData.jawabanReferensi : "",
         point: editData.jenisSoal === "Uraian/Esai" ? 0 : Number(editData.point),
@@ -1788,26 +2064,38 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   const renderOpsiView = (s, opsiArr, jawabanArr) => {
     if (s.jenisSoal === "Pilihan Ganda" || s.jenisSoal === "Pilihan Ganda Kompleks") {
       return opsiArr.map((o, oi) => {
-        const isCorrect = s.jenisSoal === "Pilihan Ganda" ? jawabanArr[0] === o : jawabanArr.includes(o);
+        const oText = getOpsiText(o);
+        const oImg = getOpsiImg(o);
+        const isCorrect = s.jenisSoal === "Pilihan Ganda" ? jawabanArr[0] === oText : jawabanArr.includes(oText);
         return (
           <div key={oi} className="flex items-start gap-2 px-3 py-2" style={{ background: isCorrect ? "#f0fdf4" : "#f8fafc", border: `1px solid ${isCorrect ? "#86efac" : "#e2e8f0"}`, borderRadius: "0" }}>
             <span className="w-6 h-6 flex items-center justify-center text-xs font-black flex-shrink-0" style={{ background: isCorrect ? "#16a34a" : "#003082", color: "#fff", borderRadius: "0" }}>{String.fromCharCode(65 + oi)}</span>
-            <span className="text-sm flex-1"><HtmlMathText html={o} /></span>
+            <div className="flex-1">
+              <span className="text-sm"><HtmlMathText html={oText} /></span>
+              {oImg && <img src={oImg} alt="opsi" className="mt-1 max-h-20 object-contain rounded border border-slate-200" />}
+            </div>
             {isCorrect && <span className="text-xs font-bold" style={{ color: "#16a34a" }}>✓ Benar</span>}
           </div>
         );
       });
     }
     if (s.jenisSoal === "Benar/Salah Kompleks") {
-      return opsiArr.map((o, oi) => (
-        <div key={oi} className="flex items-center gap-3 px-3 py-2" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0" }}>
-          <span className="text-xs font-bold text-slate-500 w-5">{oi + 1}.</span>
-          <span className="text-sm flex-1"><HtmlMathText html={o} /></span>
-          <span className="text-xs font-black px-2 py-1" style={{ background: jawabanArr[oi] === "Benar" ? "#16a34a" : jawabanArr[oi] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanArr[oi] ? "#fff" : "#94a3b8", borderRadius: "0" }}>
-            {jawabanArr[oi] || "—"}
-          </span>
-        </div>
-      ));
+      return opsiArr.map((o, oi) => {
+        const oText = getOpsiText(o);
+        const oImg = getOpsiImg(o);
+        return (
+          <div key={oi} className="flex items-center gap-3 px-3 py-2" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0" }}>
+            <span className="text-xs font-bold text-slate-500 w-5">{oi + 1}.</span>
+            <div className="flex-1">
+              <span className="text-sm"><HtmlMathText html={oText} /></span>
+              {oImg && <img src={oImg} alt="opsi" className="mt-1 max-h-16 object-contain rounded border border-slate-200" />}
+            </div>
+            <span className="text-xs font-black px-2 py-1" style={{ background: jawabanArr[oi] === "Benar" ? "#16a34a" : jawabanArr[oi] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanArr[oi] ? "#fff" : "#94a3b8", borderRadius: "0" }}>
+              {jawabanArr[oi] || "—"}
+            </span>
+          </div>
+        );
+      });
     }
     return null;
   };
@@ -1824,38 +2112,43 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
           <button onClick={handleAddOpsi} className="text-xs px-3 py-1 font-medium" style={{ background: "#eff6ff", color: "#003082", borderRadius: "0", border: "1px solid #93c5fd" }}>+ Tambah Opsi</button>
         </div>
         <div className="space-y-2">
-          {opsi.map((o, i) => (
-            <div key={i} className="flex items-start gap-2">
-              <span className="w-7 h-7 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-2" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
-                {String.fromCharCode(65 + i)}
-              </span>
-              <div className="flex-1">
-                <textarea
-                  value={o}
-                  onChange={e => handleOpsiChange(i, e.target.value)}
-                  rows={2}
-                  className="w-full border-2 border-slate-200 px-3 py-2 text-sm focus:outline-none focus:border-blue-400 resize-none"
-                  style={{ borderRadius: "0" }}
-                  placeholder={`Opsi ${String.fromCharCode(65 + i)}`}
-                />
-              </div>
-              {jenisSoal === "Pilihan Ganda" && (
-                <input type="radio" name="edit_pg" checked={jawabanBenar[0] === o && o.trim() !== ""} onChange={() => handleJawabanPG(o)} className="w-4 h-4 mt-3" title="Jawaban benar" />
-              )}
-              {jenisSoal === "Pilihan Ganda Kompleks" && (
-                <input type="checkbox" checked={jawabanBenar.includes(o) && o.trim() !== ""} onChange={() => handleJawabanPGK(o)} className="w-4 h-4 mt-3" title="Jawaban benar" />
-              )}
-              {jenisSoal === "Benar/Salah Kompleks" && (
-                <div className="flex gap-1 flex-shrink-0 mt-2">
-                  <button onClick={() => handleJawabanBS(i, "Benar")} className="text-xs px-2 py-1 font-bold" style={{ background: jawabanBenar[i] === "Benar" ? "#16a34a" : "#e2e8f0", color: jawabanBenar[i] === "Benar" ? "#fff" : "#475569", borderRadius: "0" }}>B</button>
-                  <button onClick={() => handleJawabanBS(i, "Salah")} className="text-xs px-2 py-1 font-bold" style={{ background: jawabanBenar[i] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanBenar[i] === "Salah" ? "#fff" : "#475569", borderRadius: "0" }}>S</button>
+          {opsi.map((o, i) => {
+            const oText = getOpsiText(o);
+            const oImg = getOpsiImg(o);
+            return (
+              <div key={i} className="flex items-start gap-2">
+                <span className="w-7 h-7 text-xs font-bold flex items-center justify-center flex-shrink-0 mt-2" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
+                  {String.fromCharCode(65 + i)}
+                </span>
+                <div className="flex-1">
+                  <textarea
+                    value={oText}
+                    onChange={e => handleOpsiChange(i, e.target.value)}
+                    rows={2}
+                    className="w-full border-2 border-slate-200 px-3 py-2 text-sm focus:outline-none focus:border-blue-400 resize-none"
+                    style={{ borderRadius: "0" }}
+                    placeholder={`Opsi ${String.fromCharCode(65 + i)}`}
+                  />
+                  <OpsiImageInserter img={oImg} onImgChange={img => handleOpsiImgChange(i, img)} addToast={addToast} />
                 </div>
-              )}
-              {opsi.length > 2 && (
-                <button onClick={() => handleRemoveOpsi(i)} className="text-red-400 hover:text-red-600 text-xl mt-1.5 flex-shrink-0">×</button>
-              )}
-            </div>
-          ))}
+                {jenisSoal === "Pilihan Ganda" && (
+                  <input type="radio" name="edit_pg" checked={jawabanBenar[0] === oText && oText.trim() !== ""} onChange={() => handleJawabanPG(oText)} className="w-4 h-4 mt-3" title="Jawaban benar" />
+                )}
+                {jenisSoal === "Pilihan Ganda Kompleks" && (
+                  <input type="checkbox" checked={jawabanBenar.includes(oText) && oText.trim() !== ""} onChange={() => handleJawabanPGK(oText)} className="w-4 h-4 mt-3" title="Jawaban benar" />
+                )}
+                {jenisSoal === "Benar/Salah Kompleks" && (
+                  <div className="flex gap-1 flex-shrink-0 mt-2">
+                    <button onClick={() => handleJawabanBS(i, "Benar")} className="text-xs px-2 py-1 font-bold" style={{ background: jawabanBenar[i] === "Benar" ? "#16a34a" : "#e2e8f0", color: jawabanBenar[i] === "Benar" ? "#fff" : "#475569", borderRadius: "0" }}>B</button>
+                    <button onClick={() => handleJawabanBS(i, "Salah")} className="text-xs px-2 py-1 font-bold" style={{ background: jawabanBenar[i] === "Salah" ? "#CC0000" : "#e2e8f0", color: jawabanBenar[i] === "Salah" ? "#fff" : "#475569", borderRadius: "0" }}>S</button>
+                  </div>
+                )}
+                {opsi.length > 2 && (
+                  <button onClick={() => handleRemoveOpsi(i)} className="text-red-400 hover:text-red-600 text-xl mt-1.5 flex-shrink-0">×</button>
+                )}
+              </div>
+            );
+          })}
         </div>
         {jenisSoal === "Pilihan Ganda" && <p className="text-xs text-slate-400 mt-1">🔘 Pilih radio = jawaban benar</p>}
         {jenisSoal === "Pilihan Ganda Kompleks" && <p className="text-xs text-slate-400 mt-1">☑️ Centang semua jawaban benar</p>}
@@ -2119,12 +2412,11 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
   const [modalKoreksi, setModalKoreksi] = useState(null);
   const [skorPerSoal, setSkorPerSoal] = useState({});
   const [savingKoreksi, setSavingKoreksi] = useState(false);
-  const [kkmData, setKkmData] = useState({});
   const [bobotObj, setBobotObj] = useState(80);
   const [bobotEsai, setBobotEsai] = useState(20);
   const [bobotLoading, setBobotLoading] = useState(false);
   const [bobotSaving, setBobotSaving] = useState(false);
-  const [konfirmHapus, setKonfirmHapus] = useState(null); // { nisn, mapel, asesmen, waktu, nama }
+  const [konfirmHapus, setKonfirmHapus] = useState(null);
   const [deletingHasil, setDeletingHasil] = useState(false);
 
   const handleHapusHasil = async () => {
@@ -2141,32 +2433,28 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
     finally { setDeletingHasil(false); }
   };
 
-  const loadKKM = async () => {
-    const data = await fetchKKM();
-    setKkmData(data);
+  const loadBobot = async () => {
+    setBobotLoading(true);
+    try {
+      const data = await FS.getBobotNilai();
+      if (data.status === "success") {
+        setBobotObj(Number(data.data.bobot_objektif) || 80);
+        setBobotEsai(Number(data.data.bobot_esai) || 20);
+      }
+    } catch {} finally { setBobotLoading(false); }
   };
- const loadBobot = async () => {
-  setBobotLoading(true);
-  try {
-    const data = await FS.getBobotNilai();
-    if (data.status === "success") {
-      setBobotObj(Number(data.data.bobot_objektif) || 80);
-      setBobotEsai(Number(data.data.bobot_esai) || 20);
-    }
-  } catch {} finally { setBobotLoading(false); }
-};
 
-const saveBobot = async () => {
-  setBobotSaving(true);
-  try {
-    const d = await FS.simpanBobotNilai({ bobot_objektif: bobotObj, bobot_esai: bobotEsai });
-    if (d.status === "success") addToast("Bobot berhasil disimpan!", "success");
-    else addToast("Gagal menyimpan bobot", "error");
-  } catch { addToast("Gagal terhubung ke server", "error"); }
-  setBobotSaving(false);
-};
+  const saveBobot = async () => {
+    setBobotSaving(true);
+    try {
+      const d = await FS.simpanBobotNilai({ bobot_objektif: bobotObj, bobot_esai: bobotEsai });
+      if (d.status === "success") addToast("Bobot berhasil disimpan!", "success");
+      else addToast("Gagal menyimpan bobot", "error");
+    } catch { addToast("Gagal terhubung ke server", "error"); }
+    setBobotSaving(false);
+  };
 
-  useEffect(() => { loadKKM(); loadBobot(); }, []);
+  useEffect(() => { loadBobot(); }, []);
 
   const fetchHasil = async (targetMapel = "Semua") => {
     setLoading(true);
@@ -2184,11 +2472,14 @@ const saveBobot = async () => {
 
   const handleFilterMapel = (m) => { setFilterMapel(m); fetchHasil(m); };
 
-  const filtered = hasil.filter(h => {
-    if (filterAsesmen !== "Semua" && h.asesmen !== filterAsesmen) return false;
-    if (search && !h.nama?.toLowerCase().includes(search.toLowerCase()) && !h.nisn?.includes(search)) return false;
-    return true;
-  });
+  // Filter + sort A-Z berdasarkan nama
+  const filtered = hasil
+    .filter(h => {
+      if (filterAsesmen !== "Semua" && h.asesmen !== filterAsesmen) return false;
+      if (search && !h.nama?.toLowerCase().includes(search.toLowerCase()) && !h.nisn?.includes(search)) return false;
+      return true;
+    })
+    .sort((a, b) => (a.nama || "").localeCompare(b.nama || "", "id", { sensitivity: "base" }));
 
   const hitungNilaiAkhir = (h) => {
     const obj = Number(h.skorObjektif || 0);
@@ -2197,11 +2488,6 @@ const saveBobot = async () => {
     if (!adaEsai) return obj;
     if (esai !== null) return Math.round(obj * (bobotObj/100) + esai * (bobotEsai/100));
     return obj;
-  };
-
-  const getKKMForMapel = (mapel) => {
-    const kkm = kkmData[mapel];
-    return kkm !== undefined && !isNaN(kkm) ? kkm : 75;
   };
 
   const handleExportXLSX = async () => {
@@ -2214,11 +2500,11 @@ const saveBobot = async () => {
       filtered.forEach(h => { const key = h.mapel || "Lainnya"; if (!mapelGroups[key]) mapelGroups[key] = []; mapelGroups[key].push(h); });
       Object.entries(mapelGroups).forEach(([mapelNama, rows]) => {
         const wsData = [["No","Waktu","NISN","Nama","Kelas","Asesmen","Skor Objektif","Skor Esai","Nilai Akhir","Keterangan"],
-          ...rows.map((h, i) => { const nilaiAkhir = hitungNilaiAkhir(h); const kkm = getKKMForMapel(h.mapel); const ket = nilaiAkhir >= kkm ? "Tuntas" : "Belum Tuntas"; return [i+1, h.waktu||"", h.nisn||"", h.nama||"", h.noAbsen||"", h.asesmen||"", Number(h.skorObjektif||0), h.skorEsai !== undefined && h.skorEsai !== "" ? Number(h.skorEsai) : "-", nilaiAkhir, ket]; }),
+          ...rows.map((h, i) => { const nilaiAkhir = hitungNilaiAkhir(h); const ket = getKriteria(nilaiAkhir); return [i+1, h.waktu||"", h.nisn||"", h.nama||"", h.noAbsen||"", h.asesmen||"", Number(h.skorObjektif||0), h.skorEsai !== undefined && h.skorEsai !== "" ? Number(h.skorEsai) : "-", nilaiAkhir, ket]; }),
           [], ["","","","","","Rata-rata","","", Math.round(rows.reduce((s, h) => s + hitungNilaiAkhir(h), 0) / rows.length)],
           ["","","","","","Nilai Tertinggi","","", Math.max(...rows.map(h => hitungNilaiAkhir(h)))],
           ["","","","","","Nilai Terendah","","", Math.min(...rows.map(h => hitungNilaiAkhir(h)))],
-          ["","","","","","Jumlah Tuntas (≥ KKM)","","", rows.filter(h => hitungNilaiAkhir(h) >= getKKMForMapel(h.mapel)).length],
+          ["","","","","","Jumlah Mahir/Cakap","","", rows.filter(h => hitungNilaiAkhir(h) >= 66).length],
         ];
         const ws = window.XLSX.utils.aoa_to_sheet(wsData);
         ws["!cols"] = [{wch:5},{wch:18},{wch:14},{wch:25},{wch:10},{wch:16},{wch:14},{wch:10},{wch:12},{wch:14}];
@@ -2226,7 +2512,7 @@ const saveBobot = async () => {
         window.XLSX.utils.book_append_sheet(wb, ws, sheetName);
       });
       const wsGabungan = window.XLSX.utils.aoa_to_sheet([["No","Waktu","NISN","Nama","Kelas","Mapel","Asesmen","Skor Objektif","Skor Esai","Nilai Akhir","Keterangan"],
-        ...filtered.map((h, i) => { const nilaiAkhir = hitungNilaiAkhir(h); const kkm = getKKMForMapel(h.mapel); const ket = nilaiAkhir >= kkm ? "Tuntas" : "Belum Tuntas"; return [i+1, h.waktu||"", h.nisn||"", h.nama||"", h.noAbsen||"", h.mapel||"", h.asesmen||"", Number(h.skorObjektif||0), h.skorEsai !== undefined && h.skorEsai !== "" ? Number(h.skorEsai) : "-", nilaiAkhir, ket]; })]);
+        ...filtered.map((h, i) => { const nilaiAkhir = hitungNilaiAkhir(h); const ket = getKriteria(nilaiAkhir); return [i+1, h.waktu||"", h.nisn||"", h.nama||"", h.noAbsen||"", h.mapel||"", h.asesmen||"", Number(h.skorObjektif||0), h.skorEsai !== undefined && h.skorEsai !== "" ? Number(h.skorEsai) : "-", nilaiAkhir, ket]; })]);
       wsGabungan["!cols"] = [{wch:5},{wch:18},{wch:14},{wch:25},{wch:10},{wch:20},{wch:16},{wch:14},{wch:10},{wch:12},{wch:14}];
       window.XLSX.utils.book_append_sheet(wb, wsGabungan, "GABUNGAN");
       const tgl = new Date().toISOString().slice(0,10);
@@ -2291,8 +2577,8 @@ const saveBobot = async () => {
               const nilaiAkhir = hitungNilaiAkhir(h);
               const sudahKoreksi = h.skorEsai !== undefined && h.skorEsai !== "";
               const adaEsai = h.adaEsai === "TRUE" || h.adaEsai === true || (h.jawabanEsai && h.jawabanEsai !== "" && h.jawabanEsai !== "[]");
-              const kkm = getKKMForMapel(h.mapel);
-              const keterangan = nilaiAkhir >= kkm ? "Tuntas" : "Belum Tuntas";
+              const keterangan = getKriteria(nilaiAkhir);
+              const ketStyle = { ...getKriteriaStyle(nilaiAkhir), borderRadius: "0" };
               return (
                 <tr key={i} style={{ background: i%2===0 ? "#fff" : "#f8fafc" }}>
                   <td className="px-3 py-2.5 text-slate-500 whitespace-nowrap">{h.waktu}</td>
@@ -2302,8 +2588,8 @@ const saveBobot = async () => {
                   <td className="px-3 py-2.5">{h.asesmen}</td>
                   <td className="px-3 py-2.5 text-center font-bold" style={{ color: "#003082" }}>{h.skorObjektif ?? "-"}</td>
                   <td className="px-3 py-2.5 text-center">{!adaEsai ? <span className="text-slate-300">—</span> : sudahKoreksi ? <span className="font-bold text-green-600">{h.skorEsai}</span> : <span className="font-bold" style={{ color: "#b45309" }}>Belum</span>}</td>
-                  <td className="px-3 py-2.5 text-center"><span className="font-black text-sm" style={{ color: nilaiAkhir>=kkm ? "#15803d" : nilaiAkhir>=60 ? "#b45309" : "#CC0000" }}>{nilaiAkhir}</span></td>
-                  <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 text-xs font-bold" style={{ background: keterangan==="Tuntas" ? "#f0fdf4" : "#fef2f2", color: keterangan==="Tuntas" ? "#15803d" : "#CC0000", border: `1px solid ${keterangan==="Tuntas" ? "#86efac" : "#fca5a5"}`, borderRadius: "0" }}>{keterangan}</span></td>
+                  <td className="px-3 py-2.5 text-center"><span className="font-black text-sm" style={{ color: nilaiAkhir>=86 ? "#15803d" : nilaiAkhir>=66 ? "#003082" : nilaiAkhir>=41 ? "#b45309" : "#CC0000" }}>{nilaiAkhir}</span></td>
+                  <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 text-xs font-bold" style={ketStyle}>{keterangan}</span></td>
                   <td className="px-3 py-2.5 text-center">
                     <div className="flex items-center justify-center gap-1.5">
                       {adaEsai && <button onClick={() => { setModalKoreksi(h); setSkorPerSoal({}); }} className="text-xs font-bold px-2 py-1" style={{ background: sudahKoreksi ? "#f0fdf4" : "#fff7ed", color: sudahKoreksi ? "#15803d" : "#b45309", borderRadius: "0", border: `1px solid ${sudahKoreksi ? "#86efac" : "#fcd34d"}` }}>{sudahKoreksi ? "✏️" : "📝"}</button>}
@@ -3080,7 +3366,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
         const jml = opsiAll.length;
         if (!jml) return;
         let skor = 0;
-        opsiAll.forEach(o => { if (benar.includes(o) === jwb.includes(o)) skor++; });
+        opsiAll.forEach(o => { const t = getOpsiText(o); if (benar.includes(t) === jwb.includes(t)) skor++; });
         const dapat = Math.round((pt * skor / jml) * 100) / 100;
         didapatPoint += dapat;
         detail.push({ no: idx + 1, jenis: "PGK", dapat, max: pt, ket: `${skor}/${jml} opsi tepat` });
@@ -3273,7 +3559,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
   if (!soal) return <div className="text-center py-10 text-slate-500">Soal tidak tersedia</div>;
 
   return (
-    <div className="max-w-2xl mx-auto px-3 py-4">
+    <div className="w-full max-w-2xl mx-auto px-2 py-3">
       {/* Header ujian */}
       <div className="flex items-center justify-between mb-3 bg-white shadow px-4 py-3" style={{ borderLeft: "4px solid #CC0000", borderRadius: "0" }}>
         <div>
@@ -3307,42 +3593,51 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
       </div>
 
       {/* Konten soal */}
-      <div className="bg-white shadow-lg p-5 mb-4" style={{ borderTop: "3px solid #CC0000", borderRadius: "0" }}>
-        <div className="flex items-start gap-3 mb-4">
-          <span className="text-white text-xs font-bold px-2.5 py-1 flex-shrink-0" style={{ background: "#CC0000" }}>{currentIdx + 1}</span>
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2 flex-wrap">
-              <span className="text-xs px-2 py-0.5 font-bold uppercase tracking-wide" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
-                {soal.jenisSoal}
-              </span>
-              {soal.jenisSoal !== "Uraian/Esai" && (
-                <span className="text-xs px-2 py-0.5 font-bold" style={{ background: "#fef9c3", color: "#854d0e", border: "1px solid #ca8a04", borderRadius: "0" }}>⭐ {soal.point} poin</span>
-              )}
-              {soal.jenisSoal === "Uraian/Esai" && (
-                <span className="text-xs px-2 py-0.5 font-bold" style={{ background: "#fff7ed", color: "#9a3412", border: "1px solid #ea580c", borderRadius: "0" }}>✏️ Koreksi manual</span>
-              )}
-            </div>
-            {/* Render soal dengan HTML (support bold, list, formula) */}
-            <div className="text-slate-800 font-medium leading-relaxed prose prose-sm max-w-none">
-              <RenderHTML html={soal.soal} />
-            </div>
-          </div>
+      <div className="bg-white shadow-lg mb-4" style={{ borderTop: "3px solid #CC0000", borderRadius: "0" }}>
+        {/* Baris atas: nomor soal + badge jenis */}
+        <div className="flex items-center gap-2 px-4 pt-4 pb-2 flex-wrap">
+          <span className="text-white text-xs font-black px-2.5 py-1 flex-shrink-0" style={{ background: "#CC0000" }}>{currentIdx + 1}</span>
+          <span className="text-xs px-2 py-0.5 font-bold uppercase tracking-wide" style={{ background: "#003082", color: "#fff", borderRadius: "0" }}>
+            {soal.jenisSoal}
+          </span>
+          {soal.jenisSoal !== "Uraian/Esai" && (
+            <span className="text-xs px-2 py-0.5 font-bold" style={{ background: "#fef9c3", color: "#854d0e", border: "1px solid #ca8a04", borderRadius: "0" }}>⭐ {soal.point} poin</span>
+          )}
+          {soal.jenisSoal === "Uraian/Esai" && (
+            <span className="text-xs px-2 py-0.5 font-bold" style={{ background: "#fff7ed", color: "#9a3412", border: "1px solid #ea580c", borderRadius: "0" }}>✏️ Koreksi manual</span>
+          )}
+        </div>
+
+        {/* Teks soal — full width, tidak disempitkan oleh nomor di samping */}
+        <div className="px-4 pb-3 text-slate-800 font-medium leading-relaxed prose prose-sm max-w-none text-base">
+          <RenderHTML html={soal.soal} />
         </div>
 
         {/* Gambar soal */}
         {soal.gambar && soal.gambar.trim() && (
-          <div className="mb-4"><GambarSoal url={soal.gambar} alt="Gambar soal" /></div>
+          <div className="px-4 pb-4"><GambarSoal url={soal.gambar} alt="Gambar soal" /></div>
         )}
+
+        {/* Separator tipis sebelum opsi */}
+        <div style={{ borderTop: "1px solid #f1f5f9" }} />
+
+        {/* Area opsi dengan padding yang konsisten */}
+        <div className="px-4 py-4">
 
         {/* Pilihan Ganda */}
         {soal.jenisSoal === "Pilihan Ganda" && (
           <div className="space-y-2">
             {opsiList.map((o, i) => {
-              const sel = jawaban[soal.id]?.[0] === o;
+              const oText = getOpsiText(o);
+              const oImg = getOpsiImg(o);
+              const sel = jawaban[soal.id]?.[0] === oText;
               return (
-                <button key={i} onClick={() => setJawaban(p => ({ ...p, [soal.id]: [o] }))} className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all" style={{ border: sel ? "2px solid #CC0000" : "2px solid #d1d5db", background: sel ? "#fef2f2" : "#fff", borderRadius: "0" }}>
+                <button key={i} onClick={() => setJawaban(p => ({ ...p, [soal.id]: [oText] }))} className="w-full flex items-start gap-3 px-4 py-3 text-left transition-all" style={{ border: sel ? "2px solid #CC0000" : "2px solid #d1d5db", background: sel ? "#fef2f2" : "#fff", borderRadius: "0" }}>
                   <span className="w-8 h-8 flex items-center justify-center text-sm font-extrabold flex-shrink-0" style={{ background: sel ? "#CC0000" : "#f1f5f9", color: sel ? "#fff" : "#475569", borderRadius: "0" }}>{String.fromCharCode(65 + i)}</span>
-                  <span className="text-sm font-medium flex-1" style={{ color: sel ? "#9b1c1c" : "#1e293b" }}><MathText text={o} /></span>
+                  <div className="flex-1">
+                    <span className="text-sm font-medium" style={{ color: sel ? "#9b1c1c" : "#1e293b" }}><MathText text={oText} /></span>
+                    {oImg && <img src={oImg} alt="opsi" className="mt-2 max-h-24 object-contain rounded" />}
+                  </div>
                 </button>
               );
             })}
@@ -3354,14 +3649,19 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
           <div className="space-y-2">
             <p className="text-xs font-bold mb-2 px-3 py-1.5" style={{ color: "#003082", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: "0" }}>✅ Pilih SEMUA jawaban yang benar — skor parsial per opsi</p>
             {opsiList.map((o, i) => {
-              const sel = (jawaban[soal.id] || []).includes(o);
+              const oText = getOpsiText(o);
+              const oImg = getOpsiImg(o);
+              const sel = (jawaban[soal.id] || []).includes(oText);
               return (
                 <button key={i} onClick={() => setJawaban(p => {
                   const prev = p[soal.id] || [];
-                  return { ...p, [soal.id]: prev.includes(o) ? prev.filter(x => x !== o) : [...prev, o] };
-                })} className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all" style={{ border: sel ? "2px solid #003082" : "2px solid #d1d5db", background: sel ? "#eff6ff" : "#fff", borderRadius: "0" }}>
-                  <input type="checkbox" checked={sel} onChange={() => { }} className="w-5 h-5 border-slate-300" />
-                  <span className="text-sm font-medium flex-1"><MathText text={o} /></span>
+                  return { ...p, [soal.id]: prev.includes(oText) ? prev.filter(x => x !== oText) : [...prev, oText] };
+                })} className="w-full flex items-start gap-3 px-4 py-3 text-left transition-all" style={{ border: sel ? "2px solid #003082" : "2px solid #d1d5db", background: sel ? "#eff6ff" : "#fff", borderRadius: "0" }}>
+                  <input type="checkbox" checked={sel} onChange={() => { }} className="w-5 h-5 border-slate-300 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <span className="text-sm font-medium"><MathText text={oText} /></span>
+                    {oImg && <img src={oImg} alt="opsi" className="mt-2 max-h-24 object-contain rounded" />}
+                  </div>
                 </button>
               );
             })}
@@ -3373,11 +3673,16 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
           <div className="space-y-3">
             <p className="text-xs font-bold mb-2 px-3 py-1.5" style={{ color: "#9a3412", background: "#fff7ed", border: "1px solid #fb923c", borderRadius: "0" }}>Tentukan Benar atau Salah — skor parsial per pernyataan</p>
             {opsiList.map((o, i) => {
+              const oText = getOpsiText(o);
+              const oImg = getOpsiImg(o);
               const val = (jawaban[soal.id] || [])[i];
               return (
-                <div key={i} className="flex items-center gap-3 p-3" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0" }}>
-                  <span className="text-xs text-slate-500 font-bold w-5 flex-shrink-0">{i + 1}.</span>
-                  <p className="flex-1 text-sm text-slate-700"><MathText text={o} /></p>
+                <div key={i} className="flex items-start gap-3 p-3" style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "0" }}>
+                  <span className="text-xs text-slate-500 font-bold w-5 flex-shrink-0 pt-0.5">{i + 1}.</span>
+                  <div className="flex-1">
+                    <p className="text-sm text-slate-700"><MathText text={oText} /></p>
+                    {oImg && <img src={oImg} alt="opsi" className="mt-1 max-h-16 object-contain rounded" />}
+                  </div>
                   <div className="flex gap-2 flex-shrink-0">
                     {["Benar", "Salah"].map(v => (
                       <button key={v} onClick={() => setJawaban(p => {
@@ -3417,7 +3722,8 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
             </div>
           </div>
         )}
-      </div>
+        </div>{/* end px-4 py-4 */}
+      </div>{/* end card soal */}
 
       {/* Tombol navigasi */}
       <div className="flex gap-3">
