@@ -13,7 +13,27 @@ const DEFAULT_ASESMEN = [
 ];
 const JENIS_SOAL_LENGKAP = ["Pilihan Ganda","Pilihan Ganda Kompleks","Benar/Salah Kompleks","Uraian/Esai"];
 const GURU_PASSWORD = "guru123";
+const ADMIN_PASSWORD = "admin123";
 const DEMO_TOKEN = "UJIAN2024";
+
+const TINGKAT_KELAS = ["1","2","3","4","5","6"];
+
+// Kelas 6 default — namespace "" agar collection path Firestore tidak berubah
+const KELAS_DEFAULT = { id:"kelas6", namaKelas:"Kelas 6", tingkat:"6", password:GURU_PASSWORD, namespace:"", isDefault:true };
+
+function loadKelasList() {
+  try {
+    const d = JSON.parse(localStorage.getItem("adminKelasList") || "null");
+    if (Array.isArray(d) && d.length > 0) return d;
+  } catch {}
+  return [KELAS_DEFAULT];
+}
+function saveKelasList(list) { try { localStorage.setItem("adminKelasList", JSON.stringify(list)); } catch {} }
+
+function cariKelasByPassword(pwd) {
+  if (!pwd) return null;
+  return loadKelasList().find(k => k.password === pwd) || null;
+}
 
 // ============================================================
 // KATEX — Render formula matematika
@@ -564,7 +584,11 @@ function AppHeader({ logoUrl, namaSekolah }) {
 function GuruLogin({ onLogin }) {
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState("");
-  const handle = () => { if (pwd === GURU_PASSWORD) { onLogin(); setErr(""); } else setErr("Password salah!"); };
+  const handle = () => {
+    const kelas = cariKelasByPassword(pwd.trim());
+    if (kelas) { onLogin(kelas); setErr(""); }
+    else setErr("Password salah! Hubungi admin jika lupa password.");
+  };
   return (
     <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(160deg, #003082 0%, #001a4d 60%, #8B0000 100%)" }}>
       <div className="bg-white rounded-none shadow-2xl w-full max-w-sm text-center overflow-hidden" style={{ border: "3px solid #CC0000" }}>
@@ -621,37 +645,36 @@ const btn = (color="blue") => ({
 // ============================================================
 // API helpers
 // ============================================================
-async function fetchMapelList() {
-  const d = await FS.getAllMapel();
+async function fetchMapelList(ns="") {
+  const d = await FS.getAllMapel(ns);
   return d.status === "success" ? d.data : [...DEFAULT_MAPEL];
 }
-async function fetchAsesmenList() {
-  const d = await FS.getAllAsesmen();
+async function fetchAsesmenList(ns="") {
+  const d = await FS.getAllAsesmen(ns);
   return d.status === "success" ? d.data : [...DEFAULT_ASESMEN];
 }
-async function fetchKKTP() {
+async function fetchKKTP(ns="") {
   try {
-    const d = await FS.getKKM(); // reuse endpoint yang sama
+    const d = await FS.getKKM(ns);
     if (d.status === "success" && d.data && d.data.__kktp__) return d.data.__kktp__;
   } catch {}
-  return { pb: 40, bk: 65, ck: 85 }; // default interval
+  return { pb: 40, bk: 65, ck: 85 };
 }
-async function simpanKKTP(interval) {
-  // Simpan sebagai key __kktp__ dalam struktur KKM yang sama
-  const d = await FS.simpanKKM({ kkm: { __kktp__: interval } });
+async function simpanKKTP(interval, ns="") {
+  const d = await FS.simpanKKM({ kkm: { __kktp__: interval } }, ns);
   return d.status === "success";
 }
 
 // ============================================================
 // DASHBOARD (dengan profil guru)
 // ============================================================
-function TabDashboard({ onNav, addToast, settings }) {
+function TabDashboard({ onNav, addToast, settings, ns="" }) {
   const [stats, setStats] = useState({ siswa:0, soal:0, hasil:0 });
   const [loadingStats, setLoadingStats] = useState(false);
   
   useEffect(() => {
     setLoadingStats(true);
-    FS.getStats()
+    FS.getStats(ns)
       .then(d => { if(d.status==="success") setStats(d.data); })
       .catch(()=>{})
       .finally(()=>setLoadingStats(false));
@@ -737,7 +760,7 @@ function TabDashboard({ onNav, addToast, settings }) {
 // ============================================================
 // DATA SISWA (import/export XLSX)
 // ============================================================
-function TabSiswa({ scriptUrl, addToast }) {
+function TabSiswa({ scriptUrl, addToast, ns="" }) {
   const [daftarSiswa, setDaftarSiswa] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -750,14 +773,14 @@ function TabSiswa({ scriptUrl, addToast }) {
   const fileInputRef = useRef(null);
   const fetchSiswa = async () => {
     setLoading(true);
-    try { const d = await FS.getSiswa(); if (d.status==="success") setDaftarSiswa(d.data || []); } catch {} finally { setLoading(false); }
+    try { const d = await FS.getSiswa(ns); if (d.status==="success") setDaftarSiswa(d.data || []); } catch {} finally { setLoading(false); }
   };
   useEffect(() => { fetchSiswa(); }, []);
   const handleTambah = async () => {
     if (!nisn.trim() || !nama.trim() || !kelas.trim()) return addToast("Semua field harus diisi!", "error");
     setSaving(true);
     try {
-      const d = await FS.tambahSiswa({ nisn:nisn.trim(), nama:nama.trim(), kelas:kelas.trim() });
+      const d = await FS.tambahSiswa({ nisn:nisn.trim(), nama:nama.trim(), kelas:kelas.trim() }, ns);
       if (d.status==="success") { addToast("Siswa berhasil ditambahkan!", "success"); setNisn(""); setNama(""); setKelas(""); setShowForm(false); fetchSiswa(); }
       else addToast(d.message || "Gagal", "error");
     } catch { addToast("Tidak terhubung ke server", "warning"); } finally { setSaving(false); }
@@ -765,7 +788,7 @@ function TabSiswa({ scriptUrl, addToast }) {
   const handleHapus = async (nisnTarget) => {
     if (!window.confirm(`Hapus siswa NISN ${nisnTarget}?`)) return;
     try {
-      await FS.hapusSiswa({ nisn:nisnTarget });
+      await FS.hapusSiswa({ nisn:nisnTarget }, ns);
       addToast("Siswa dihapus!", "success"); fetchSiswa();
     } catch { addToast("Gagal menghapus siswa", "error"); }
   };
@@ -810,7 +833,7 @@ function TabSiswa({ scriptUrl, addToast }) {
       if (siswaList.length === 0) return addToast("Tidak ada data valid dalam file.", "error");
       let sukses = 0, gagal = 0;
       for (const s of siswaList) {
-        try { const d = await FS.tambahSiswa(s); if (d.status === "success") sukses++; else gagal++; } catch { gagal++; }
+        try { const d = await FS.tambahSiswa(s, ns); if (d.status === "success") sukses++; else gagal++; } catch { gagal++; }
       }
       addToast(`✅ Import selesai: ${sukses} berhasil, ${gagal} gagal (duplikasi NISN dilewati).`, sukses > 0 ? "success" : "error");
       fetchSiswa();
@@ -875,7 +898,7 @@ function TabSiswa({ scriptUrl, addToast }) {
 // ============================================================
 // MANAJEMEN MAPEL & ASESMEN (dengan toggle switch token, edit token)
 // ============================================================
-function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, setAsesmenList }) {
+function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, setAsesmenList, ns="" }) {
   const [newMapel, setNewMapel] = useState("");
   const [newAsesmen, setNewAsesmen] = useState("");
   const [tokenMapel, setTokenMapel] = useState(mapelList[0] || "");
@@ -894,7 +917,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
 
   const loadKKTP = async () => {
     setKktpLoading(true);
-    const data = await fetchKKTP();
+    const data = await fetchKKTP(ns);
     setKktp(data);
     setKKTPGlobal(data);
     setKktpLoading(false);
@@ -912,7 +935,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
       return addToast("Interval harus berurutan: Perlu Bimbingan < Berkembang < Cakap < Mahir", "error");
     }
     setKktpSaving(true);
-    const success = await simpanKKTP(kktp);
+    const success = await simpanKKTP(kktp, ns);
     if (success) { setKKTPGlobal(kktp); addToast("KKTP berhasil disimpan!", "success"); }
     else addToast("Gagal menyimpan KKTP", "error");
     setKktpSaving(false);
@@ -923,11 +946,11 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     if (!m) return addToast("Nama mapel tidak boleh kosong!", "error");
     if (mapelList.includes(m)) return addToast("Mapel sudah ada!", "warning");
     try {
-      const d = await FS.tambahMapelKustom({ nama:m });
+      const d = await FS.tambahMapelKustom({ nama:m }, ns);
       if (d.status === "success") {
         addToast(`Mapel "${m}" ditambahkan!`, "success");
         setNewMapel("");
-        const newMapels = await fetchMapelList();
+        const newMapels = await fetchMapelList(ns);
         setMapelList(newMapels);
         loadKKTP();
       } else addToast(d.message, "error");
@@ -937,10 +960,10 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     if (DEFAULT_MAPEL.includes(m)) return addToast("Mapel bawaan tidak bisa dihapus.", "warning");
     if (!window.confirm(`Hapus mapel "${m}"?`)) return;
     try {
-      const d = await FS.hapusMapelKustom({ nama:m });
+      const d = await FS.hapusMapelKustom({ nama:m }, ns);
       if (d.status === "success") {
         addToast(`Mapel "${m}" dihapus.`, "success");
-        const newMapels = await fetchMapelList();
+        const newMapels = await fetchMapelList(ns);
         setMapelList(newMapels);
         loadKKTP();
       } else addToast(d.message, "error");
@@ -951,11 +974,11 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     if (!a) return addToast("Nama asesmen tidak boleh kosong!", "error");
     if (asesmenList.includes(a)) return addToast("Asesmen sudah ada!", "warning");
     try {
-      const d = await FS.tambahAsesmenKustom({ nama:a });
+      const d = await FS.tambahAsesmenKustom({ nama:a }, ns);
       if (d.status === "success") {
         addToast(`Asesmen "${a}" ditambahkan!`, "success");
         setNewAsesmen("");
-        const newAsesmens = await fetchAsesmenList();
+        const newAsesmens = await fetchAsesmenList(ns);
         setAsesmenList(newAsesmens);
       } else addToast(d.message, "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
@@ -964,10 +987,10 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     if (DEFAULT_ASESMEN.includes(a)) return addToast("Asesmen bawaan tidak bisa dihapus.", "warning");
     if (!window.confirm(`Hapus asesmen "${a}"?`)) return;
     try {
-      const d = await FS.hapusAsesmenKustom({ nama:a });
+      const d = await FS.hapusAsesmenKustom({ nama:a }, ns);
       if (d.status === "success") {
         addToast(`Asesmen "${a}" dihapus.`, "success");
-        const newAsesmens = await fetchAsesmenList();
+        const newAsesmens = await fetchAsesmenList(ns);
         setAsesmenList(newAsesmens);
       } else addToast(d.message, "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
@@ -975,14 +998,14 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
 
   const fetchToken = async () => {
     setLoadToken(true);
-    try { const d = await FS.getDaftarToken(); if (d.status==="success") setDaftarToken(d.data || []); } catch {} finally { setLoadToken(false); }
+    try { const d = await FS.getDaftarToken(ns); if (d.status==="success") setDaftarToken(d.data || []); } catch {} finally { setLoadToken(false); }
   };
   useEffect(() => { fetchToken(); }, []);
 
   const handleSimpanToken = async () => {
     if (!tokenValue.trim()) return addToast("Isi token terlebih dahulu!", "error");
     try {
-      const d = await FS.simpanToken({ mapel:tokenMapel, asesmen:tokenAsesmen, token:tokenValue.toUpperCase() });
+      const d = await FS.simpanToken({ mapel:tokenMapel, asesmen:tokenAsesmen, token:tokenValue.toUpperCase() }, ns);
       if (d.status==="success") { addToast(`Token "${tokenValue.toUpperCase()}" disimpan!`, "success"); setTokenValue(""); fetchToken(); }
       else addToast(d.message, "error");
     } catch { addToast(`Demo: Token "${tokenValue}" (belum terhubung)`, "warning"); }
@@ -998,7 +1021,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     ));
     try {
       const newStatus = currentStatus === "TRUE" ? "FALSE" : "TRUE";
-      const result = await FS.updateTokenStatus({ mapel, asesmen, token, status: newStatus });
+      const result = await FS.updateTokenStatus({ mapel, asesmen, token, status: newStatus }, ns);
       if (result.status === "success") {
         addToast(`Token ${newStatus === "TRUE" ? "✅ diaktifkan" : "🔒 dinonaktifkan"}!`, "success");
         fetchToken(); // refresh dari server untuk sinkron
@@ -1036,7 +1059,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
     if (!editTokenValue.trim()) return addToast("Token tidak boleh kosong!", "error");
     setEditSaving(true);
     try {
-      const d = await FS.editToken({ mapel:editModal.mapel, asesmen:editModal.asesmen, tokenLama:editModal.token, tokenBaru:editTokenValue.toUpperCase() });
+      const d = await FS.editToken({ mapel:editModal.mapel, asesmen:editModal.asesmen, tokenLama:editModal.token, tokenBaru:editTokenValue.toUpperCase() }, ns);
       if (d.status === "success") {
         addToast("Token berhasil diubah!", "success");
         fetchToken();
@@ -1689,12 +1712,12 @@ function ImageInserter({ gambar, setGambar, addToast }) {
   );
 }
 
-function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
+function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   mapelList = mapelList || DEFAULT_MAPEL;
   asesmenList = asesmenList || DEFAULT_ASESMEN;
   const [soal, setSoal] = useState("");
   const [gambar, setGambar] = useState("");
-  const [point, setPoint] = useState(10);
+  const [point, setPoint] = useState(3); // PG default = 3
   const [mapel, setMapel] = useState(mapelList[0]);
   const [asesmen, setAsesmen] = useState(asesmenList[0]);
   const [jenisSoal, setJenisSoal] = useState("Pilihan Ganda");
@@ -1710,8 +1733,11 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
     else setOpsi(["", "", "", ""]);
     setJawabanBenar([]);
     setJawabanReferensi("");
-    if (j === "Uraian/Esai") setPoint(0);
-    else setPoint(10);
+    // Default point per jenis soal
+    if (j === "Pilihan Ganda") setPoint(3);
+    else if (j === "Pilihan Ganda Kompleks") setPoint(6);
+    else if (j === "Benar/Salah Kompleks") setPoint(6);
+    else setPoint(0); // Uraian/Esai
   };
 
   const handleOpsiChange = (i, v) => { const a = [...opsi]; a[i] = makeOpsiObj(v, getOpsiImg(a[i])); setOpsi(a); };
@@ -1760,16 +1786,22 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
     
     setLoading(true);
     try {
-      const d = await FS.tambahSoal(payload);
+      const d = await FS.tambahSoal(payload, ns);
       if (d.status === "success") {
-        FS.updateSoalCounter(1);
+        FS.updateSoalCounter(1, ns);
         addToast("Soal berhasil disimpan! ✅", "success");
+        // Reset semua field soal — form bersih siap input berikutnya
         setSoal("");
         setGambar("");
-        setOpsi(["", "", "", ""]);
         setJawabanBenar([]);
         setJawabanReferensi("");
-        if (jenisSoal !== "Uraian/Esai") setPoint(10);
+        if (jenisSoal === "Benar/Salah Kompleks") setOpsi(["", "", ""]);
+        else if (jenisSoal === "Uraian/Esai") setOpsi([]);
+        else setOpsi(["", "", "", ""]);
+        // Reset point ke default per jenis soal
+        if (jenisSoal === "Pilihan Ganda") setPoint(3);
+        else if (jenisSoal === "Pilihan Ganda Kompleks") setPoint(6);
+        else if (jenisSoal === "Benar/Salah Kompleks") setPoint(6);
         else setPoint(0);
       } else addToast(d.message || "Gagal menyimpan", "error");
     } catch { addToast("Mode Demo: Belum terhubung ke Apps Script", "warning"); }
@@ -1805,12 +1837,13 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
               {JENIS_SOAL_LENGKAP.map(j => <option key={j}>{j}</option>)}
             </select>
           </Field>
-          <Field label="Point/Nilai">
+          <Field label="Point/Nilai" hint={jenisSoal === "Pilihan Ganda" ? "Default: 3" : jenisSoal === "Pilihan Ganda Kompleks" ? "Default: 6" : jenisSoal === "Benar/Salah Kompleks" ? "Default: 6" : "Ditentukan saat koreksi"}>
             <input 
               type="number" 
               value={point} 
               onChange={e => setPoint(Number(e.target.value))} 
-              min={jenisSoal === "Uraian/Esai" ? 0 : 1} 
+              min={jenisSoal === "Uraian/Esai" ? 0 : 1}
+              placeholder={jenisSoal === "Pilihan Ganda" ? "3" : jenisSoal === "Pilihan Ganda Kompleks" ? "6" : jenisSoal === "Benar/Salah Kompleks" ? "6" : "0"}
               className={inp} 
               disabled={jenisSoal === "Uraian/Esai"}
             />
@@ -1920,7 +1953,7 @@ function getMapelKode(mapel) { return mapelKodeMap[mapel] || mapel.replace(/\s+/
 // ================================================================
 // TAB VIEW SOAL — pratinjau + edit soal guru
 // ================================================================
-function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
+function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   const [filterMapel, setFilterMapel] = useState(mapelList[0] || "");
   const [filterAsesmen, setFilterAsesmen] = useState(asesmenList[0] || "");
   const [soalList, setSoalList] = useState([]);
@@ -1947,7 +1980,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   const fetchSoal = async () => {
     setLoading(true); setSoalList([]);
     try {
-      const d = await FS.getSoalGuru({ mapel:filterMapel, asesmen:filterAsesmen });
+      const d = await FS.getSoalGuru({ mapel:filterMapel, asesmen:filterAsesmen }, ns);
       if (d.status === "success") setSoalList(d.soal || []);
       else addToast(d.message || "Gagal memuat soal", "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
@@ -1958,9 +1991,9 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   const handleHapusSoal = async (id) => {
     setDeleting(true);
     try {
-      const d = await FS.hapusSoal({ id, mapel:filterMapel, asesmen:filterAsesmen });
+      const d = await FS.hapusSoal({ id, mapel:filterMapel, asesmen:filterAsesmen }, ns);
       if (d.status === "success") {
-        FS.updateSoalCounter(-1);
+        FS.updateSoalCounter(-1, ns);
         addToast("✅ Soal berhasil dihapus", "success");
         setSoalList(prev => prev.filter(s => s.id !== id));
         setHapusId(null);
@@ -2040,7 +2073,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
         jawabanReferensi: editData.jenisSoal === "Uraian/Esai" ? editData.jawabanReferensi : "",
         point: editData.jenisSoal === "Uraian/Esai" ? 0 : Number(editData.point),
       };
-      const d = await FS.editSoal(payload);
+      const d = await FS.editSoal(payload, ns);
       if (d.status === "success") {
         addToast("✅ Soal berhasil diperbarui!", "success");
         // Update soal di list lokal
@@ -2400,7 +2433,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList }) {
   );
 }
 
-function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
+function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   mapelList = mapelList || DEFAULT_MAPEL;
   asesmenList = asesmenList || DEFAULT_ASESMEN;
   const [hasil, setHasil] = useState([]);
@@ -2423,7 +2456,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
     if (!konfirmHapus) return;
     setDeletingHasil(true);
     try {
-      const d = await FS.hapusHasil({ nisn:konfirmHapus.nisn, mapel:konfirmHapus.mapel, asesmen:konfirmHapus.asesmen, waktu:konfirmHapus.waktu });
+      const d = await FS.hapusHasil({ nisn:konfirmHapus.nisn, mapel:konfirmHapus.mapel, asesmen:konfirmHapus.asesmen, waktu:konfirmHapus.waktu }, ns);
       if (d.status === "success") {
         addToast("✅ Data hasil berhasil dihapus", "success");
         setHasil(prev => prev.filter(h => !(h.nisn === konfirmHapus.nisn && h.mapel === konfirmHapus.mapel && h.asesmen === konfirmHapus.asesmen && h.waktu === konfirmHapus.waktu)));
@@ -2436,7 +2469,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
   const loadBobot = async () => {
     setBobotLoading(true);
     try {
-      const data = await FS.getBobotNilai();
+      const data = await FS.getBobotNilai(ns);
       if (data.status === "success") {
         setBobotObj(Number(data.data.bobot_objektif) || 80);
         setBobotEsai(Number(data.data.bobot_esai) || 20);
@@ -2447,7 +2480,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
   const saveBobot = async () => {
     setBobotSaving(true);
     try {
-      const d = await FS.simpanBobotNilai({ bobot_objektif: bobotObj, bobot_esai: bobotEsai });
+      const d = await FS.simpanBobotNilai({ bobot_objektif: bobotObj, bobot_esai: bobotEsai }, ns);
       if (d.status === "success") addToast("Bobot berhasil disimpan!", "success");
       else addToast("Gagal menyimpan bobot", "error");
     } catch { addToast("Gagal terhubung ke server", "error"); }
@@ -2460,10 +2493,10 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
     setLoading(true);
     try {
       if (targetMapel === "Semua") {
-        const d = await FS.getHasil();
+        const d = await FS.getHasil(ns);
         setHasil(d.status === "success" ? (d.data || []) : []);
       } else {
-        const d = await FS.getHasilPerMapel({ mapel: targetMapel });
+        const d = await FS.getHasilPerMapel({ mapel: targetMapel }, ns);
         setHasil(d.status === "success" ? (d.data || []) : []);
       }
     } catch { setHasil([]); } finally { setLoading(false); }
@@ -2528,7 +2561,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
       const totalEsai = Object.values(skorPerSoal).reduce((a,b) => a + (Number(b) || 0), 0);
       const jumlahEsai = Object.keys(skorPerSoal).length;
       const rerataSkorEsai = jumlahEsai > 0 ? Math.round(totalEsai / jumlahEsai) : 0;
-      const d = await FS.simpanKoreksiEsai({ nisn:modalKoreksi.nisn, mapel:modalKoreksi.mapel, asesmen:modalKoreksi.asesmen, waktu:modalKoreksi.waktu, skorEsai:rerataSkorEsai, detailSkorEsai:JSON.stringify(skorPerSoal) });
+      const d = await FS.simpanKoreksiEsai({ nisn:modalKoreksi.nisn, mapel:modalKoreksi.mapel, asesmen:modalKoreksi.asesmen, waktu:modalKoreksi.waktu, skorEsai:rerataSkorEsai, detailSkorEsai:JSON.stringify(skorPerSoal) }, ns);
       if (d.status==="success") { addToast("Koreksi berhasil disimpan!", "success"); setModalKoreksi(null); setSkorPerSoal({}); fetchHasil(filterMapel); }
       else addToast(d.message||"Gagal","error");
     } catch { addToast("Gagal terhubung","error"); } finally { setSavingKoreksi(false); }
@@ -2665,7 +2698,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList }) {
 // ============================================================
 // PENGATURAN UJIAN
 // ============================================================
-function TabPengaturan({ settings, onSaveSettings, addToast }) {
+function TabPengaturan({ settings, onSaveSettings, addToast, ns="" }) {
   const [logoPreview, setLogoPreview]     = useState(settings.logoUrl || "");
   const [logoBase64, setLogoBase64]       = useState(settings.logoUrl || "");
   const [logoConverting, setLogoConverting] = useState(false);
@@ -2748,8 +2781,8 @@ function TabPengaturan({ settings, onSaveSettings, addToast }) {
     onSaveSettings(newSettings);
     setSaving(true);
     try {
-      const d = await FS.simpanPengaturan(newSettings);
-      if (d.status === "success") addToast("✅ Pengaturan disimpan ke Firestore!", "success");
+      const d = await FS.simpanPengaturanKelas(newSettings, ns);
+      if (d.status === "success") addToast("✅ Pengaturan kelas disimpan ke Firestore!", "success");
       else addToast("Tersimpan lokal. Gagal sinkron Firestore.", "warning");
     } catch { addToast("Pengaturan disimpan lokal.", "info"); }
     setSaving(false);
@@ -2880,9 +2913,320 @@ function TabPengaturan({ settings, onSaveSettings, addToast }) {
 }
 
 // ============================================================
+// MODAL PILIH LOGIN — muncul saat logo diklik 5x
+// ============================================================
+function ModalPilihLogin({ onPilihGuru, onPilihAdmin, onClose }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.75)" }}>
+      <div className="bg-white shadow-2xl w-full max-w-xs mx-4 overflow-hidden" style={{ border: "3px solid #003082", borderRadius: "0" }}>
+        <div style={{ background: "linear-gradient(135deg,#003082,#001a4d)", padding: "20px 24px 16px" }}>
+          <h2 className="text-base font-black text-white tracking-wide text-center" style={{ fontFamily:"'Georgia',serif" }}>AKSES PANEL</h2>
+          <p className="text-blue-200 text-xs mt-1 uppercase tracking-widest text-center">Pilih mode login</p>
+        </div>
+        <div className="p-5 space-y-3">
+          <button onClick={onPilihGuru} className="w-full text-white font-bold py-4 text-sm flex items-center gap-3 px-5" style={{ background:"#CC0000", borderRadius:"0" }}>
+            <span className="text-2xl">🎓</span>
+            <div className="text-left">
+              <p className="font-black">Login sebagai Guru</p>
+              <p className="text-xs opacity-80 font-normal">Kelola soal, siswa & hasil ujian</p>
+            </div>
+          </button>
+          <button onClick={onPilihAdmin} className="w-full text-white font-bold py-4 text-sm flex items-center gap-3 px-5" style={{ background:"#d97706", borderRadius:"0" }}>
+            <span className="text-2xl">⚙️</span>
+            <div className="text-left">
+              <p className="font-black">Login sebagai Admin</p>
+              <p className="text-xs opacity-80 font-normal">Kelola kelas & password</p>
+            </div>
+          </button>
+          <button onClick={onClose} className="w-full font-bold py-2 text-sm" style={{ background:"#f1f5f9", color:"#475569", borderRadius:"0" }}>✕ Batal</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN LOGIN
+// ============================================================
+function AdminLogin({ onLogin, onBack }) {
+  const [pwd, setPwd] = useState("");
+  const [err, setErr] = useState("");
+  const getAdminPwd = () => { try { return localStorage.getItem("adminPwd") || ADMIN_PASSWORD; } catch { return ADMIN_PASSWORD; } };
+  const handle = () => {
+    if (pwd.trim() === getAdminPwd()) { onLogin(); setErr(""); }
+    else setErr("Password admin salah!");
+  };
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(160deg,#1a1a2e 0%,#16213e 60%,#0f3460 100%)" }}>
+      <div className="bg-white shadow-2xl w-full max-w-sm text-center overflow-hidden" style={{ border:"3px solid #f59e0b", borderRadius:"0" }}>
+        <div style={{ background:"linear-gradient(135deg,#f59e0b,#d97706)", padding:"24px 24px 20px" }}>
+          <div className="text-4xl mb-2">⚙️</div>
+          <h2 className="text-xl font-black text-white tracking-wide" style={{ fontFamily:"'Georgia',serif" }}>PANEL ADMIN</h2>
+          <p className="text-yellow-100 text-xs mt-1 uppercase tracking-widest">Manajemen Kelas</p>
+        </div>
+        <div className="p-6">
+          <p className="text-slate-600 text-sm mb-5 font-medium">Masukkan password administrator</p>
+          <input type="password" value={pwd} onChange={e=>setPwd(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handle()} placeholder="Password admin..." className="w-full border-2 px-4 py-3 text-slate-800 focus:outline-none mb-3" style={{ borderColor:"#f59e0b", borderRadius:"0" }} />
+          {err && <p className="text-red-600 text-sm mb-3 font-semibold">{err}</p>}
+          <button onClick={handle} className="w-full text-white font-bold py-3 uppercase tracking-widest text-sm mb-3" style={{ background:"#d97706", borderRadius:"0" }}>Masuk sebagai Admin</button>
+          <button onClick={onBack} className="w-full font-bold py-2 text-sm" style={{ background:"#f1f5f9", color:"#475569", borderRadius:"0" }}>← Kembali</button>
+        </div>
+        <div style={{ background:"#d97706", height:"6px" }} />
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN PANEL — Manajemen Kelas + Pengaturan
+// ============================================================
+function AdminPanel({ addToast, onLogout }) {
+  const [kelasList, setKelasListState] = useState(() => loadKelasList());
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ namaKelas:"", tingkat:"", password:"", isDefault:false });
+  const [delConfirm, setDelConfirm] = useState(null);
+  const [showPwd, setShowPwd] = useState({});
+  const [tabAktif, setTabAktif] = useState("kelas");
+  const [pwdLama, setPwdLama] = useState("");
+  const [pwdBaru, setPwdBaru] = useState("");
+  const [pwdKonfirm, setPwdKonfirm] = useState("");
+
+  const saveList = (list) => { setKelasListState(list); saveKelasList(list); };
+  const resetForm = () => { setForm({ namaKelas:"", tingkat:"", password:"", isDefault:false }); setEditId(null); setShowForm(false); };
+  const getAdminPwd = () => { try { return localStorage.getItem("adminPwd") || ADMIN_PASSWORD; } catch { return ADMIN_PASSWORD; } };
+
+  const handleSimpan = () => {
+    if (!form.namaKelas.trim()) return addToast("Nama kelas harus diisi!", "error");
+    if (!form.password.trim()) return addToast("Password kelas harus diisi!", "error");
+    if (form.password.trim() === getAdminPwd()) return addToast("Password tidak boleh sama dengan password admin!", "error");
+    const dupPwd = kelasList.find(k => k.password === form.password.trim() && k.id !== editId);
+    if (dupPwd) return addToast(`Password sudah dipakai kelas lain (${dupPwd.namaKelas})!`, "error");
+    if (!editId && kelasList.some(k => k.namaKelas.toLowerCase() === form.namaKelas.trim().toLowerCase())) return addToast("Nama kelas sudah ada!", "error");
+
+    if (editId) {
+      const kelasTarget = kelasList.find(k => k.id === editId);
+      const updated = kelasTarget?.isDefault
+        // Kelas 6 default: hanya password yang boleh diubah
+        ? kelasList.map(k => k.id === editId ? { ...k, password:form.password.trim() } : k)
+        : kelasList.map(k => k.id === editId ? { ...k, namaKelas:form.namaKelas.trim(), tingkat:form.tingkat, password:form.password.trim() } : k);
+      saveList(updated);
+      addToast("Kelas berhasil diperbarui! ✅", "success");
+    } else {
+      const id = "kelas_" + Date.now();
+      saveList([...kelasList, { id, namaKelas:form.namaKelas.trim(), tingkat:form.tingkat, password:form.password.trim(), namespace:id+"_ns", isDefault:false, createdAt:new Date().toISOString() }]);
+      addToast("Kelas berhasil ditambahkan! ✅", "success");
+    }
+    resetForm();
+  };
+
+  const handleEdit = (k) => {
+    setForm({ namaKelas:k.namaKelas, tingkat:k.tingkat||"", password:k.password||"", isDefault:k.isDefault||false });
+    setEditId(k.id); setShowForm(true);
+  };
+
+  const handleHapus = (id) => {
+    if (kelasList.find(k=>k.id===id)?.isDefault) return addToast("Kelas 6 default tidak bisa dihapus!", "error");
+    saveList(kelasList.filter(k=>k.id!==id));
+    addToast("Kelas dihapus.", "success"); setDelConfirm(null);
+  };
+
+  const handleGantiPwd = () => {
+    if (pwdLama !== getAdminPwd()) return addToast("Password lama salah!", "error");
+    if (pwdBaru.length < 6) return addToast("Password baru minimal 6 karakter!", "error");
+    if (pwdBaru !== pwdKonfirm) return addToast("Konfirmasi tidak cocok!", "error");
+    try { localStorage.setItem("adminPwd", pwdBaru); } catch {}
+    addToast("Password admin berhasil diubah! ✅", "success");
+    setPwdLama(""); setPwdBaru(""); setPwdKonfirm("");
+  };
+
+  const inpAdmin = "w-full border-2 px-3 py-2 text-sm focus:outline-none rounded-none";
+  const inpLight = inpAdmin + " bg-white border-slate-300 text-slate-800 focus:border-yellow-500";
+  const inpDark = inpAdmin + " border-white/20 text-white focus:border-yellow-400";
+  const inpDarkBg = { background:"rgba(255,255,255,0.08)", color:"white" };
+
+  return (
+    <div className="min-h-screen" style={{ background:"linear-gradient(160deg,#1a1a2e 0%,#16213e 100%)" }}>
+      <header className="text-white px-5 py-4 flex items-center justify-between sticky top-0 z-20" style={{ background:"rgba(0,0,0,0.4)", borderBottom:"1px solid rgba(255,255,255,0.1)" }}>
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg" style={{ background:"#f59e0b" }}>⚙️</div>
+          <div>
+            <p className="font-black text-sm tracking-wide">Panel Admin</p>
+            <p className="text-xs opacity-60">Manajemen Kelas</p>
+          </div>
+        </div>
+        <button onClick={onLogout} className="text-xs font-bold px-3 py-1.5" style={{ background:"rgba(255,255,255,0.1)", borderRadius:"0", color:"#fca5a5", border:"1px solid rgba(255,255,255,0.2)" }}>🚪 Keluar</button>
+      </header>
+
+      <div className="flex" style={{ borderBottom:"1px solid rgba(255,255,255,0.1)" }}>
+        {[{ id:"kelas", label:"🏫 Manajemen Kelas" }, { id:"settings", label:"🔐 Pengaturan Admin" }].map(t => (
+          <button key={t.id} onClick={()=>setTabAktif(t.id)} className="px-5 py-3 text-sm font-bold transition-colors"
+            style={{ color:tabAktif===t.id?"#f59e0b":"rgba(255,255,255,0.5)", borderBottom:tabAktif===t.id?"2px solid #f59e0b":"2px solid transparent", borderRadius:"0", background:"transparent" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="p-4 md:p-8 max-w-3xl mx-auto">
+
+        {tabAktif === "kelas" && (
+          <div className="space-y-5">
+            <div className="p-4 flex items-start gap-3" style={{ background:"rgba(22,163,74,0.15)", border:"1px solid rgba(22,163,74,0.4)", borderLeft:"4px solid #16a34a", borderRadius:"0" }}>
+              <span className="text-2xl">✅</span>
+              <div>
+                <p className="font-bold text-white text-sm">Kelas 6 — Default (Data Lama Terlindungi)</p>
+                <p className="text-xs mt-0.5" style={{ color:"rgba(255,255,255,0.6)" }}>Password: <code className="bg-black/30 px-1 rounded text-green-300">guru123</code> — data soal & siswa Kelas 6 di Firestore tetap aman dan tidak akan berubah.</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-black text-white uppercase tracking-wide">Daftar Kelas</h2>
+                <p className="text-xs" style={{ color:"rgba(255,255,255,0.5)" }}>{kelasList.length} kelas terdaftar</p>
+              </div>
+              <button onClick={()=>{ resetForm(); setShowForm(v=>!v); }} className="font-bold py-2 px-4 text-sm text-white"
+                style={{ background:showForm&&!editId?"#475569":"#d97706", borderRadius:"0" }}>
+                {showForm&&!editId?"✕ Batal":"➕ Tambah Kelas"}
+              </button>
+            </div>
+
+            {showForm && (
+              <div className="p-5 space-y-4" style={{ background:"rgba(255,255,255,0.05)", border:"1px solid rgba(245,158,11,0.4)", borderLeft:"4px solid #f59e0b", borderRadius:"0" }}>
+                <h3 className="font-bold text-sm uppercase tracking-wide" style={{ color:"#fbbf24" }}>{editId?"✏️ Edit Kelas":"➕ Tambah Kelas Baru"}</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {form.isDefault ? (
+                    <div className="md:col-span-2 p-3 text-xs" style={{ background:"rgba(22,163,74,0.15)", border:"1px solid rgba(22,163,74,0.4)", borderRadius:"0" }}>
+                      <p className="font-bold" style={{ color:"#86efac" }}>🔒 Kelas 6 Default — Nama & tingkat terkunci</p>
+                      <p style={{ color:"rgba(255,255,255,0.6)" }}>Hanya password yang bisa diubah untuk melindungi data Firestore lama.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-xs font-bold mb-1" style={{ color:"rgba(255,255,255,0.7)" }}>Nama Kelas *</label>
+                        <input value={form.namaKelas} onChange={e=>setForm(f=>({...f,namaKelas:e.target.value}))} placeholder="Contoh: Kelas 5, Kelas 4A" className={inpDark} style={inpDarkBg} />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold mb-1" style={{ color:"rgba(255,255,255,0.7)" }}>Tingkat Kelas</label>
+                        <select value={form.tingkat} onChange={e=>setForm(f=>({...f,tingkat:e.target.value,namaKelas:f.namaKelas||(e.target.value?`Kelas ${e.target.value}`:"")}))}
+                          className={inpDark} style={{ background:"#1e2a4a", color:"white" }}>
+                          <option value="">-- Pilih Tingkat --</option>
+                          {TINGKAT_KELAS.map(t => (
+                            <option key={t} value={t} disabled={kelasList.some(k=>k.tingkat===t&&k.id!==editId)}>
+                              Kelas {t}{kelasList.some(k=>k.tingkat===t&&k.id!==editId)?" (sudah ada)":""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-bold mb-1" style={{ color:"rgba(255,255,255,0.7)" }}>
+                    Password Login Guru * <span className="font-normal opacity-60 ml-1">— digunakan guru untuk masuk ke panel kelas ini</span>
+                  </label>
+                  <div className="relative">
+                    <input type={showPwd.form?"text":"password"} value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))}
+                      placeholder="Buat password unik untuk kelas ini" className={inpDark+" pr-10"} style={inpDarkBg} />
+                    <button type="button" onClick={()=>setShowPwd(p=>({...p,form:!p.form}))} className="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-60 hover:opacity-100">
+                      {showPwd.form?"🙈":"👁"}
+                    </button>
+                  </div>
+                </div>
+                <div className="p-3 text-xs" style={{ background:"rgba(59,130,246,0.15)", border:"1px solid rgba(59,130,246,0.3)", borderRadius:"0" }}>
+                  <p className="font-bold" style={{ color:"#93c5fd" }}>ℹ️ Setelah kelas ditambahkan:</p>
+                  <p style={{ color:"rgba(255,255,255,0.6)" }}>Guru ketik password ini di halaman login → masuk Panel Guru dengan database baru (kosong, terpisah dari kelas lain).</p>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={handleSimpan} className="flex-1 text-white font-bold py-2.5 text-sm" style={{ background:"#d97706", borderRadius:"0" }}>
+                    💾 {editId?"Perbarui":"Simpan"} Kelas
+                  </button>
+                  <button onClick={resetForm} className="px-4 font-bold py-2.5 text-sm" style={{ background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.7)", borderRadius:"0" }}>Batal</button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {kelasList.map(k => (
+                <div key={k.id} className="p-4 flex items-center gap-4"
+                  style={{ background:"rgba(255,255,255,0.05)", border:`1px solid ${k.isDefault?"rgba(22,163,74,0.4)":"rgba(255,255,255,0.1)"}`, borderLeft:`4px solid ${k.isDefault?"#16a34a":"#d97706"}`, borderRadius:"0" }}>
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-black text-lg flex-shrink-0"
+                    style={{ background:k.isDefault?"#16a34a":"#d97706" }}>
+                    {k.tingkat||k.namaKelas.charAt(0)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-black text-white">{k.namaKelas}</p>
+                      {k.isDefault && <span className="text-xs font-bold px-2 py-0.5" style={{ background:"rgba(22,163,74,0.2)", color:"#86efac", border:"1px solid rgba(22,163,74,0.4)", borderRadius:"0" }}>DEFAULT</span>}
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-xs" style={{ color:"rgba(255,255,255,0.4)" }}>Password guru:</span>
+                      <code className="text-xs px-1" style={{ background:"rgba(0,0,0,0.3)", color:showPwd[k.id]?"#fbbf24":"rgba(255,255,255,0.4)" }}>
+                        {showPwd[k.id]?k.password:"••••••••"}
+                      </code>
+                      <button type="button" onClick={()=>setShowPwd(p=>({...p,[k.id]:!p[k.id]}))} className="text-xs opacity-50 hover:opacity-100 ml-0.5">
+                        {showPwd[k.id]?"🙈":"👁"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button onClick={()=>handleEdit(k)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(255,255,255,0.1)", color:"#93c5fd", borderRadius:"0" }}>✏️</button>
+                    {!k.isDefault && <button onClick={()=>setDelConfirm(k.id)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(204,0,0,0.2)", color:"#fca5a5", borderRadius:"0" }}>🗑️</button>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tabAktif === "settings" && (
+          <div className="space-y-5">
+            <div>
+              <h2 className="text-lg font-black text-white uppercase tracking-wide">Pengaturan Admin</h2>
+              <p className="text-xs" style={{ color:"rgba(255,255,255,0.5)" }}>Ubah password akun administrator</p>
+            </div>
+            <div className="p-5 space-y-4" style={{ background:"rgba(255,255,255,0.05)", border:"1px solid rgba(245,158,11,0.3)", borderLeft:"4px solid #f59e0b", borderRadius:"0" }}>
+              <h3 className="font-bold text-sm uppercase" style={{ color:"#fbbf24" }}>🔐 Ganti Password Admin</h3>
+              {[{label:"Password Lama",val:pwdLama,set:setPwdLama,ph:"Masukkan password lama"},
+                {label:"Password Baru",val:pwdBaru,set:setPwdBaru,ph:"Minimal 6 karakter"},
+                {label:"Konfirmasi Password Baru",val:pwdKonfirm,set:setPwdKonfirm,ph:"Ulangi password baru"}].map(f=>(
+                <div key={f.label}>
+                  <label className="block text-xs font-bold mb-1" style={{ color:"rgba(255,255,255,0.7)" }}>{f.label}</label>
+                  <input type="password" value={f.val} onChange={e=>f.set(e.target.value)} placeholder={f.ph} className={inpDark} style={inpDarkBg} />
+                </div>
+              ))}
+              <button onClick={handleGantiPwd} className="w-full text-white font-bold py-2.5 text-sm" style={{ background:"#d97706", borderRadius:"0" }}>🔑 Ganti Password Admin</button>
+            </div>
+            <div className="p-4 text-xs space-y-1.5" style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:"0" }}>
+              <p className="font-bold text-white">ℹ️ Info Sistem</p>
+              <p style={{ color:"rgba(255,255,255,0.5)" }}>• Akses Admin: klik logo 5x → pilih Admin → masukkan password</p>
+              <p style={{ color:"rgba(255,255,255,0.5)" }}>• Password admin default: <code className="bg-black/30 px-1 text-yellow-300">admin123</code></p>
+              <p style={{ color:"rgba(255,255,255,0.5)" }}>• Kelas 6 default (password <code className="bg-black/30 px-1 text-green-300">guru123</code>) tidak bisa dihapus</p>
+              <p style={{ color:"rgba(255,255,255,0.5)" }}>• Setiap kelas punya database Firestore sendiri — benar-benar terpisah</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {delConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background:"rgba(0,0,0,0.7)" }}>
+          <div className="bg-white p-6 w-full max-w-xs shadow-2xl" style={{ border:"2px solid #CC0000", borderRadius:"0" }}>
+            <p className="font-bold text-slate-800 mb-1">Hapus Kelas?</p>
+            <p className="text-sm text-slate-500 mb-4">Guru tidak bisa login ke kelas ini lagi. Data soal & siswa di Firestore tidak ikut terhapus.</p>
+            <div className="flex gap-3">
+              <button onClick={()=>handleHapus(delConfirm)} className="flex-1 text-white font-bold py-2 text-sm" style={{ background:"#CC0000", borderRadius:"0" }}>Ya, Hapus</button>
+              <button onClick={()=>setDelConfirm(null)} className="flex-1 font-bold py-2 text-sm" style={{ background:"#e2e8f0", color:"#475569", borderRadius:"0" }}>Batal</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // GURU PANEL (sidebar)
 // ============================================================
-function GuruPanel({ addToast, onLogout, settings, onSaveSettings, mapelList, setMapelList, asesmenList, setAsesmenList }) {
+function GuruPanel({ addToast, onLogout, settings, onSaveSettings, mapelList, setMapelList, asesmenList, setAsesmenList, kelasAktif }) {
   const [activePage, setActivePage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const navItems = [
@@ -2891,18 +3235,68 @@ function GuruPanel({ addToast, onLogout, settings, onSaveSettings, mapelList, se
     { id:"viewsoal", icon:"👁", label:"Lihat Soal" },
     { id:"rekap", icon:"📊", label:"Rekap Hasil" }, { id:"pengaturan", icon:"⚙️", label:"Pengaturan Ujian" },
   ];
+  const ns = kelasAktif?.namespace ?? "";
+  const namaKelasPanel = kelasAktif?.namaKelas || "Kelas 6";
+
+  // Settings per kelas — terpisah dari settings global
+  const [kelasSettings, setKelasSettings] = useState(settings);
+
+  const saveKelasSettings = async (newS) => {
+    setKelasSettings(newS);
+    // Simpan ke localStorage dengan key per ns
+    const lsKey = ns ? `appSettings_${ns}` : "appSettings";
+    try { localStorage.setItem(lsKey, JSON.stringify(newS)); } catch {}
+    // Simpan ke Firestore namespace kelas
+    try { await FS.simpanPengaturanKelas(newS, ns); } catch {}
+  };
+
+  // Refresh mapel, asesmen, dan settings per kelas saat ns berubah
+  useEffect(() => {
+    // Load settings kelas dari localStorage dulu (cepat)
+    const lsKey = ns ? `appSettings_${ns}` : "appSettings";
+    try {
+      const cached = JSON.parse(localStorage.getItem(lsKey) || "null");
+      if (cached && Object.keys(cached).length > 0) setKelasSettings(cached);
+    } catch {}
+    // Lalu load dari Firestore (akurat)
+    FS.getPengaturanKelas(ns).then(data => {
+      if (data.status === "success" && data.data && Object.keys(data.data).length > 0) {
+        const remote = data.data;
+        const merged = {
+          logoUrl      : remote.logoUrl       || settings.logoUrl || "",
+          namaSekolah  : remote.namaSekolah   || settings.namaSekolah || "",
+          namaGuru     : remote.namaGuru      || "",
+          nipGuru      : remote.nipGuru       || "",
+          kotaTTD      : remote.kotaTTD       || "",
+          durasiMenit  : remote.durasiMenit   ? Number(remote.durasiMenit) : 60,
+          fotoGuru     : remote.fotoGuru      || "",
+        };
+        setKelasSettings(merged);
+        try { localStorage.setItem(lsKey, JSON.stringify(merged)); } catch {}
+      }
+    }).catch(() => {});
+    // Refresh mapel & asesmen
+    Promise.all([fetchMapelList(ns), fetchAsesmenList(ns)]).then(([mapels, asesmens]) => {
+      setMapelList(mapels);
+      setAsesmenList(asesmens);
+    }).catch(() => {});
+  }, [ns]);
+
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       <div className="px-5 py-5" style={{ borderBottom: "1px solid #1e3a8a", background: "#002266" }}>
         <p className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: "#93c5fd" }}>Panel Guru</p>
         <p className="font-black text-base mt-0.5 text-white" style={{ fontFamily: "'Georgia', serif" }}>{settings.namaSekolah || "Portal Ujian"}</p>
-        <div style={{ width: "40px", height: "3px", background: "#CC0000", marginTop: "8px" }} />
+        <div className="mt-2 px-2 py-1 inline-block" style={{ background:"#CC0000" }}>
+          <p className="text-xs font-black text-white tracking-wide">🏫 {namaKelasPanel}</p>
+        </div>
+        <div style={{ width: "40px", height: "3px", background: "#fbbf24", marginTop: "8px" }} />
       </div>
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">{navItems.map(n => (<button key={n.id} onClick={() => { setActivePage(n.id); setSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors text-left ${activePage===n.id ? "text-white" : "hover:text-white"}`} style={{ background: activePage===n.id ? "#CC0000" : "transparent", color: activePage===n.id ? "#fff" : "#93c5fd", borderRadius: "0", borderLeft: activePage===n.id ? "4px solid #fff" : "4px solid transparent" }}><span className="text-lg w-6 text-center">{n.icon}</span><span>{n.label}</span></button>))}</nav>
       <div className="px-3 py-4" style={{ borderTop: "1px solid #1e3a8a" }}><button onClick={onLogout} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors" style={{ color: "#fca5a5", borderRadius: "0" }}><span className="text-lg">🚪</span><span>Keluar</span></button></div>
     </div>
   );
-  const pageProps = { addToast, settings, onSaveSettings, mapelList, setMapelList, asesmenList, setAsesmenList };
+  const pageProps = { addToast, settings: kelasSettings, onSaveSettings: saveKelasSettings, mapelList, setMapelList, asesmenList, setAsesmenList, ns };
   return (
     <div className="min-h-screen flex" style={{ background: "#f1f5f9" }}>
       <aside className="hidden md:flex flex-col w-60 flex-shrink-0 fixed inset-y-0 left-0 z-30" style={{ background: "#003082" }}><SidebarContent /></aside>
@@ -2910,7 +3304,7 @@ function GuruPanel({ addToast, onLogout, settings, onSaveSettings, mapelList, se
       <div className="flex-1 md:ml-60 flex flex-col min-h-screen">
         <header className="md:hidden text-white px-4 py-3 flex items-center gap-3 sticky top-0 z-20" style={{ background: "#CC0000" }}><button onClick={() => setSidebarOpen(true)} className="text-white/80 hover:text-white p-1"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg></button><span className="font-bold uppercase tracking-wide text-sm">{navItems.find(n=>n.id===activePage)?.label}</span></header>
         <main className="flex-1 p-4 md:p-8 max-w-5xl mx-auto w-full">
-          {activePage==="dashboard" && <TabDashboard onNav={setActivePage} addToast={addToast} settings={settings} />}
+          {activePage==="dashboard" && <TabDashboard onNav={setActivePage} addToast={addToast} settings={kelasSettings} ns={ns} />}
           {activePage==="siswa" && <TabSiswa {...pageProps} />}
           {activePage==="mapel" && <TabMapel {...pageProps} />}
           {activePage==="soal" && <TabInputSoal {...pageProps} />}
@@ -2926,7 +3320,7 @@ function GuruPanel({ addToast, onLogout, settings, onSaveSettings, mapelList, se
 // ============================================================
 // HALAMAN SISWA (login)
 // ============================================================
-function HalamanSiswa({ onMulaiUjian, onGuruMode, mapelList = DEFAULT_MAPEL, asesmenList = DEFAULT_ASESMEN, logoUrl, namaSekolah }) {
+function HalamanSiswa({ onMulaiUjian, onGuruMode, onAdminMode, mapelList = DEFAULT_MAPEL, asesmenList = DEFAULT_ASESMEN, logoUrl, namaSekolah }) {
   const [nisn, setNisn] = useState("");
   const [namaLookup, setNamaLookup] = useState("");
   const [kelasLookup, setKelasLookup] = useState("");
@@ -2938,22 +3332,29 @@ function HalamanSiswa({ onMulaiUjian, onGuruMode, mapelList = DEFAULT_MAPEL, ase
   const [loginLoading, setLoginLoading] = useState(false);
   const lookupTimer = useRef(null);
 
+  // Cari NISN di semua kelas (semua namespace)
+  const [nsFound, setNsFound] = useState("");
   const handleNisnChange = (val) => {
     setNisn(val);
-    setNamaLookup(""); setKelasLookup(""); setLookupStatus("");
+    setNamaLookup(""); setKelasLookup(""); setLookupStatus(""); setNsFound("");
     clearTimeout(lookupTimer.current);
     if (val.trim().length < 4) return;
     lookupTimer.current = setTimeout(async () => {
       setLookupStatus("loading");
       try {
-        const data = await FS.getSiswaByNISN({ nisn: val.trim() });
-        if (data.status === "success" && data.data) {
-          setNamaLookup(data.data.nama || "");
-          setKelasLookup(data.data.kelas || "");
-          setLookupStatus("found");
-        } else {
-          setLookupStatus("notfound");
+        const kelasList = loadKelasList();
+        for (const kelas of kelasList) {
+          const ns = kelas.namespace ?? "";
+          const data = await FS.getSiswaByNISN({ nisn: val.trim() }, ns);
+          if (data.status === "success" && data.data) {
+            setNamaLookup(data.data.nama || "");
+            setKelasLookup(data.data.kelas || "");
+            setNsFound(ns);
+            setLookupStatus("found");
+            return;
+          }
         }
+        setLookupStatus("notfound");
       } catch {
         setLookupStatus("notfound");
       }
@@ -2968,14 +3369,14 @@ function HalamanSiswa({ onMulaiUjian, onGuruMode, mapelList = DEFAULT_MAPEL, ase
 
     setLoginLoading(true);
     try {
-      const data = await FS.validasiToken({ mapel, asesmen, token: token.trim() });
+      const data = await FS.validasiToken({ mapel, asesmen, token: token.trim() }, nsFound);
       if (data.status === "error") { setErr(data.message || "Token tidak valid atau sudah dinonaktifkan!"); setLoginLoading(false); return; }
       if (data.aktif === "FALSE") { setErr("Token ini sedang dinonaktifkan oleh guru. Hubungi gurumu."); setLoginLoading(false); return; }
     } catch {
       // Jika gagal fetch, biarkan lanjut
     }
     setLoginLoading(false);
-    onMulaiUjian({ nama: namaLookup, nisn, noAbsen: kelasLookup, mapel, asesmen, token });
+    onMulaiUjian({ nama: namaLookup, nisn, noAbsen: kelasLookup, mapel, asesmen, token, ns: nsFound });
   };
 
   const animationStyles = `
@@ -2989,19 +3390,26 @@ function HalamanSiswa({ onMulaiUjian, onGuruMode, mapelList = DEFAULT_MAPEL, ase
   `;
 
   const [logoTapCount, setLogoTapCount] = useState(0);
+  const [showPilihLogin, setShowPilihLogin] = useState(false);
   const logoTapTimer = useRef(null);
   const handleLogoClick = () => {
     const next = logoTapCount + 1;
     setLogoTapCount(next);
     clearTimeout(logoTapTimer.current);
-    if (next >= 5) { setLogoTapCount(0); onGuruMode(); return; }
+    if (next >= 5) { setLogoTapCount(0); setShowPilihLogin(true); return; }
     logoTapTimer.current = setTimeout(() => setLogoTapCount(0), 2000);
   };
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-start relative font-sans pt-6 pb-6" style={{ background: "linear-gradient(160deg, #003082 0%, #001a4d 60%, #8B0000 100%)" }}>
       <style>{animationStyles}</style>
-
+      {showPilihLogin && (
+        <ModalPilihLogin
+          onPilihGuru={() => { setShowPilihLogin(false); onGuruMode(); }}
+          onPilihAdmin={() => { setShowPilihLogin(false); onAdminMode(); }}
+          onClose={() => setShowPilihLogin(false)}
+        />
+      )}
       <div className="relative z-10 w-full max-w-[440px] px-4 flex flex-col items-center">
         
         {/* Header (Logo + Nama Sekolah + Title) */}
@@ -3212,7 +3620,9 @@ function RenderHTML({ html, className = "" }) {
 // ============================================================
 // HALAMAN UJIAN (HalamanUjian)
 // ============================================================
-function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGuru, kotaTTD, namaSekolah }) {
+function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGuru, kotaTTD, namaSekolah, ns="" }) {
+  // Gunakan ns dari object siswa jika ada (siswa login langsung), atau dari prop
+  const nsEfektif = siswa?.ns ?? ns;
   const [soalList, setSoalList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -3236,7 +3646,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
     const fetchSoal = async () => {
       setLoading(true);
       try {
-        const data = await FS.getSoal({ mapel:siswa.mapel, asesmen:siswa.asesmen, token:siswa.token });
+        const data = await FS.getSoal({ mapel:siswa.mapel, asesmen:siswa.asesmen, token:siswa.token }, nsEfektif);
         if (data.status === "success" && data.soal?.length > 0) setSoalList(data.soal);
         else { addToast(data.message || "Soal tidak tersedia.", "error"); setLoading(false); return; }
       } catch { addToast("Gagal terhubung ke server.", "error"); setLoading(false); return; }
@@ -3406,7 +3816,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
         jawabanEsai: adaEsai ? JSON.stringify(jawabanEsaiList) : "",
         token: siswa.token,
         waktu: new Date().toLocaleString("id-ID")
-      });
+      }, nsEfektif);
     } catch { /* gagal simpan — log saja */ }
     if (!autoSubmit) addToast("Ujian berhasil dikumpulkan! 🎉", "success");
   };
@@ -3777,24 +4187,31 @@ export default function App() {
         try { localStorage.setItem("appSettings", JSON.stringify(merged)); } catch {}
       }
     }).catch(()=>{});
+    // fetchMapelList/fetchAsesmenList dipanggil tanpa ns di init — akan di-refresh saat GuruPanel mount
     Promise.all([fetchMapelList(), fetchAsesmenList()]).then(([mapels, asesmens]) => {
       setMapelList(mapels); setAsesmenList(asesmens);
     }).catch(()=>{});
   }, []);
   
+  const [kelasAktif, setKelasAktif] = useState(null);
+
   const saveSettings = s => { setSettings(s); try { localStorage.setItem("appSettings", JSON.stringify(s)); } catch {} };
   const handleMulaiUjian = async (data) => { setSiswa(data); setMode("ujian"); try { const el = document.documentElement; if (el.requestFullscreen) await el.requestFullscreen(); else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen(); } catch {} };
   const handleSelesaiUjian = async () => { setSiswa(null); setMode("siswa"); try { if (document.fullscreenElement || document.webkitFullscreenElement) { if (document.exitFullscreen) await document.exitFullscreen(); else if (document.webkitExitFullscreen) await document.webkitExitFullscreen(); } } catch {} };
-  
+  const handleGuruLogin = (kelas) => { setKelasAktif(kelas); setMode("guru"); };
+  const handleGuruLogout = () => { setKelasAktif(null); setMode("siswa"); };
+
   return (
     <div className="min-h-screen bg-gray-100">
       <Toast toasts={toasts} />
-      {mode !== "guru" && mode !== "guruLogin" && mode !== "siswa" && <AppHeader logoUrl={settings.logoUrl} namaSekolah={settings.namaSekolah} />}
+      {mode !== "guru" && mode !== "guruLogin" && mode !== "siswa" && mode !== "adminLogin" && mode !== "admin" && <AppHeader logoUrl={settings.logoUrl} namaSekolah={settings.namaSekolah} />}
       <main className="pb-10">
-        {mode === "siswa" && <HalamanSiswa onMulaiUjian={handleMulaiUjian} onGuruMode={() => setMode("guruLogin")} mapelList={mapelList} asesmenList={asesmenList} logoUrl={settings.logoUrl} namaSekolah={settings.namaSekolah} />}
-        {mode === "ujian" && siswa && <HalamanUjian siswa={siswa} addToast={addToast} onSelesai={handleSelesaiUjian} durasiMenit={settings.durasiMenit || 60} namaGuru={settings.namaGuru || ""} nipGuru={settings.nipGuru || ""} kotaTTD={settings.kotaTTD || ""} namaSekolah={settings.namaSekolah || ""} />}
-        {mode === "guruLogin" && <GuruLogin onLogin={() => setMode("guru")} />}
-        {mode === "guru" && <GuruPanel addToast={addToast} onLogout={() => setMode("siswa")} settings={settings} onSaveSettings={saveSettings} mapelList={mapelList} setMapelList={handleSetMapelList} asesmenList={asesmenList} setAsesmenList={handleSetAsesmenList} />}
+        {mode === "siswa" && <HalamanSiswa onMulaiUjian={handleMulaiUjian} onGuruMode={() => setMode("guruLogin")} onAdminMode={() => setMode("adminLogin")} mapelList={mapelList} asesmenList={asesmenList} logoUrl={settings.logoUrl} namaSekolah={settings.namaSekolah} />}
+        {mode === "ujian" && siswa && <HalamanUjian siswa={siswa} addToast={addToast} onSelesai={handleSelesaiUjian} ns={siswa?.ns ?? ""} durasiMenit={settings.durasiMenit || 60} namaGuru={settings.namaGuru || ""} nipGuru={settings.nipGuru || ""} kotaTTD={settings.kotaTTD || ""} namaSekolah={settings.namaSekolah || ""} />}
+        {mode === "guruLogin" && <GuruLogin onLogin={handleGuruLogin} />}
+        {mode === "guru" && kelasAktif && <GuruPanel addToast={addToast} onLogout={handleGuruLogout} settings={settings} onSaveSettings={saveSettings} mapelList={mapelList} setMapelList={handleSetMapelList} asesmenList={asesmenList} setAsesmenList={handleSetAsesmenList} kelasAktif={kelasAktif} />}
+        {mode === "adminLogin" && <AdminLogin onLogin={() => setMode("admin")} onBack={() => setMode("siswa")} />}
+        {mode === "admin" && <AdminPanel addToast={addToast} onLogout={() => setMode("siswa")} />}
       </main>
     </div>
   );

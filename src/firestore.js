@@ -1,21 +1,17 @@
 // ================================================================
-// firestore.js — Layer API Firestore
-// Menggantikan seluruh Google Apps Script backend
-// Semua fungsi async, return { status:"success"|"error", ... }
+// firestore.js — Layer API Firestore (Multi-Kelas dengan Namespace)
+// ns = "" → Kelas 6 lama (data tetap aman, path tidak berubah)
+// ns = "k5" → Kelas 5 (path: k5_siswa/, k5_token/, dst)
 // ================================================================
 
-// ── KONFIGURASI — isi dari Firebase Console ──────────────────────
 export const FIREBASE_CONFIG = {
   apiKey  : "AIzaSyCnwRmJCv15nV2lFvZT8HhAzpq0a6s8rl0",
   projectId: "ujian-digital",
 };
-// ────────────────────────────────────────────────────────────────
 
 const BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
 
 // ── Helpers Firestore REST ───────────────────────────────────────
-
-/** Konversi nilai JS → Firestore field value */
 function toFV(val) {
   if (val === null || val === undefined) return { nullValue: null };
   if (typeof val === "boolean") return { booleanValue: val };
@@ -25,8 +21,6 @@ function toFV(val) {
   if (typeof val === "object")  return { mapValue: { fields: objToFields(val) } };
   return { stringValue: String(val) };
 }
-
-/** Konversi Firestore field value → nilai JS */
 function fromFV(fv) {
   if (!fv) return null;
   if ("nullValue"    in fv) return null;
@@ -38,20 +32,17 @@ function fromFV(fv) {
   if ("mapValue"     in fv) return fieldsToObj(fv.mapValue.fields || {});
   return null;
 }
-
 function objToFields(obj) {
   const fields = {};
   for (const [k, v] of Object.entries(obj)) fields[k] = toFV(v);
   return fields;
 }
-
 function fieldsToObj(fields) {
   const obj = {};
   for (const [k, fv] of Object.entries(fields)) obj[k] = fromFV(fv);
   return obj;
 }
 
-/** Ambil dokumen */
 async function fsGet(path) {
   const r = await fetch(`${BASE}/${path}?key=${FIREBASE_CONFIG.apiKey}`);
   if (r.status === 404) return null;
@@ -60,8 +51,6 @@ async function fsGet(path) {
   if (!doc.fields) return null;
   return { id: doc.name.split("/").pop(), ...fieldsToObj(doc.fields) };
 }
-
-/** Tulis/update dokumen (merge = PATCH, create = PATCH juga) */
 async function fsPatch(path, data, fields = null) {
   const url = fields
     ? `${BASE}/${path}?key=${FIREBASE_CONFIG.apiKey}&${fields.map(f => `updateMask.fieldPaths=${f}`).join("&")}`
@@ -77,15 +66,11 @@ async function fsPatch(path, data, fields = null) {
   }
   return await r.json();
 }
-
-/** Hapus dokumen */
 async function fsDelete(path) {
   const r = await fetch(`${BASE}/${path}?key=${FIREBASE_CONFIG.apiKey}`, { method: "DELETE" });
   if (!r.ok && r.status !== 404) throw new Error(`DELETE ${path} gagal: ${r.status}`);
 }
-
-/** List semua dokumen dalam koleksi */
-async function fsList(collection, { filter, orderBy, limit } = {}) {
+async function fsList(collection, { limit } = {}) {
   let url = `${BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}`;
   if (limit) url += `&pageSize=${limit}`;
   const docs = [];
@@ -104,8 +89,6 @@ async function fsList(collection, { filter, orderBy, limit } = {}) {
   } while (pageToken);
   return docs;
 }
-
-/** Buat dokumen dengan ID auto */
 async function fsAdd(collection, data) {
   const r = await fetch(`${BASE}/${collection}?key=${FIREBASE_CONFIG.apiKey}`, {
     method: "POST",
@@ -117,10 +100,8 @@ async function fsAdd(collection, data) {
     throw new Error(err.error?.message || `ADD ${collection} gagal: ${r.status}`);
   }
   const doc = await r.json();
-  return doc.name.split("/").pop(); // kembalikan ID baru
+  return doc.name.split("/").pop();
 }
-
-/** runQuery — Firestore structured query */
 async function fsQuery(collectionId, conditions = [], orderBy = null, limitN = null) {
   const where = conditions.length > 0 ? {
     compositeFilter: {
@@ -134,7 +115,6 @@ async function fsQuery(collectionId, conditions = [], orderBy = null, limitN = n
       }))
     }
   } : undefined;
-
   const query = {
     structuredQuery: {
       from: [{ collectionId }],
@@ -143,7 +123,6 @@ async function fsQuery(collectionId, conditions = [], orderBy = null, limitN = n
       ...(limitN ? { limit: limitN } : {}),
     }
   };
-
   const r = await fetch(`${BASE}:runQuery?key=${FIREBASE_CONFIG.apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -159,13 +138,27 @@ async function fsQuery(collectionId, conditions = [], orderBy = null, limitN = n
     }));
 }
 
-// ── ID generator ─────────────────────────────────────────────────
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-// ── Helper sheet name → koleksi Firestore ────────────────────────
-function soalCollectionId(mapel, asesmen) {
+// ── Namespace helper ──────────────────────────────────────────────
+// ns = ""   → Kelas 6 lama, path tidak berubah sama sekali
+// ns = "k5" → Kelas 5, prefix semua collection: "k5_siswa", "k5_token", dst
+function col(ns, name) {
+  return ns ? `${ns}_${name}` : name;
+}
+function cfgPath(ns, doc) {
+  // config/pengaturan tetap global (shared) — hanya siswa/soal/token/hasil yang dipisah
+  return `config/${doc}`;
+}
+function cfgNsPath(ns, doc) {
+  // config per-kelas: bobot, stats, kkm, mapel, asesmen
+  return ns ? `${ns}_config/${doc}` : `config/${doc}`;
+}
+
+// ── Soal collection ID ────────────────────────────────────────────
+function soalCollectionId(ns, mapel, asesmen) {
   const mapelMap = {
     "Bahasa Indonesia":"BINDO","Pendidikan Pancasila":"PPKN","IPAS":"IPAS",
     "Matematika":"MTK","Seni Rupa":"SENRUPA","Bahasa Madura":"BMADURA",
@@ -173,7 +166,16 @@ function soalCollectionId(mapel, asesmen) {
   };
   const k = mapelMap[mapel] || mapel.replace(/\s+/g,"").substring(0,8).toUpperCase();
   const a = asesmen.replace(/\s+/g,"");
-  return `soal_${k}_${a}`;
+  const base = `soal_${k}_${a}`;
+  return ns ? `${ns}_${base}` : base;
+}
+
+function tokenDocId(mapel, asesmen) {
+  return `${mapel}__${asesmen}`.replace(/[^a-zA-Z0-9_\-]/g, "_");
+}
+function hasilDocId(nisn, mapel, asesmen, waktu) {
+  const safe = (s) => String(s).replace(/[^a-zA-Z0-9]/g,"_");
+  return `${safe(nisn)}_${safe(mapel)}_${safe(asesmen)}_${safe(waktu)}`.substring(0,200);
 }
 
 // ── Default data ──────────────────────────────────────────────────
@@ -188,7 +190,7 @@ const DEFAULT_ASESMEN = [
 ];
 
 // ================================================================
-// PENGATURAN
+// PENGATURAN — global (shared semua kelas)
 // ================================================================
 export async function getPengaturan() {
   try {
@@ -196,7 +198,6 @@ export async function getPengaturan() {
     return { status:"success", data: doc || {} };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
 export async function simpanPengaturan(data) {
   try {
     const keys = ["logoUrl","namaSekolah","namaGuru","nipGuru","kotaTTD","durasiMenit","spreadsheetUrl","fotoGuru"];
@@ -208,138 +209,147 @@ export async function simpanPengaturan(data) {
 }
 
 // ================================================================
-// BOBOT NILAI
+// PENGATURAN PER KELAS (ns) — identitas guru, durasi, logo kelas
 // ================================================================
-export async function getBobotNilai() {
+export async function getPengaturanKelas(ns = "") {
   try {
-    const doc = await fsGet("config/bobot");
+    const doc = await fsGet(cfgNsPath(ns, "pengaturan"));
+    return { status:"success", data: doc || {} };
+  } catch(e) { return { status:"error", message:e.message }; }
+}
+export async function simpanPengaturanKelas(data, ns = "") {
+  try {
+    const keys = ["logoUrl","namaSekolah","namaGuru","nipGuru","kotaTTD","durasiMenit","fotoGuru"];
+    const payload = {};
+    for (const k of keys) payload[k] = data[k] !== undefined ? String(data[k]) : "";
+    await fsPatch(cfgNsPath(ns, "pengaturan"), payload);
+    return { status:"success", message:"Pengaturan kelas berhasil disimpan" };
+  } catch(e) { return { status:"error", message:e.message }; }
+}
+
+// ================================================================
+// BOBOT NILAI — per kelas (ns)
+// ================================================================
+export async function getBobotNilai(ns = "") {
+  try {
+    const doc = await fsGet(cfgNsPath(ns, "bobot"));
     if (!doc) return { status:"success", data:{ bobot_objektif:"80", bobot_esai:"20" } };
     return { status:"success", data:{ bobot_objektif: doc.bobot_objektif||"80", bobot_esai: doc.bobot_esai||"20" } };
   } catch(e) { return { status:"success", data:{ bobot_objektif:"80", bobot_esai:"20" } }; }
 }
-
-export async function simpanBobotNilai({ bobot_objektif, bobot_esai }) {
+export async function simpanBobotNilai({ bobot_objektif, bobot_esai }, ns = "") {
   try {
-    await fsPatch("config/bobot", { bobot_objektif: String(bobot_objektif), bobot_esai: String(bobot_esai) });
+    await fsPatch(cfgNsPath(ns, "bobot"), { bobot_objektif: String(bobot_objektif), bobot_esai: String(bobot_esai) });
     return { status:"success", message:"Bobot berhasil disimpan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// MAPEL & ASESMEN KUSTOM
+// MAPEL & ASESMEN KUSTOM — per kelas (ns)
 // ================================================================
-export async function getAllMapel() {
+export async function getAllMapel(ns = "") {
   try {
-    const doc = await fsGet("config/mapel");
+    const doc = await fsGet(cfgNsPath(ns, "mapel"));
     const kustom = doc?.kustom || [];
     return { status:"success", data:[...DEFAULT_MAPEL, ...kustom] };
   } catch(e) { return { status:"success", data:[...DEFAULT_MAPEL] }; }
 }
-
-export async function getAllAsesmen() {
+export async function getAllAsesmen(ns = "") {
   try {
-    const doc = await fsGet("config/asesmen");
+    const doc = await fsGet(cfgNsPath(ns, "asesmen"));
     const kustom = doc?.kustom || [];
     return { status:"success", data:[...DEFAULT_ASESMEN, ...kustom] };
   } catch(e) { return { status:"success", data:[...DEFAULT_ASESMEN] }; }
 }
-
-export async function tambahMapelKustom({ nama }) {
+export async function tambahMapelKustom({ nama }, ns = "") {
   try {
     const n = String(nama).trim();
     if (!n) return { status:"error", message:"Nama mapel tidak boleh kosong" };
     if (DEFAULT_MAPEL.includes(n)) return { status:"error", message:"Mapel bawaan tidak bisa ditambahkan lagi" };
-    const doc = await fsGet("config/mapel");
+    const doc = await fsGet(cfgNsPath(ns, "mapel"));
     const kustom = doc?.kustom || [];
     if (kustom.includes(n)) return { status:"error", message:"Mapel sudah ada" };
-    await fsPatch("config/mapel", { kustom: [...kustom, n] });
+    await fsPatch(cfgNsPath(ns, "mapel"), { kustom: [...kustom, n] });
     return { status:"success", message:"Mapel kustom berhasil ditambahkan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function hapusMapelKustom({ nama }) {
+export async function hapusMapelKustom({ nama }, ns = "") {
   try {
     const n = String(nama).trim();
     if (DEFAULT_MAPEL.includes(n)) return { status:"error", message:"Mapel bawaan tidak bisa dihapus" };
-    const doc = await fsGet("config/mapel");
+    const doc = await fsGet(cfgNsPath(ns, "mapel"));
     const kustom = (doc?.kustom || []).filter(m => m !== n);
-    await fsPatch("config/mapel", { kustom });
+    await fsPatch(cfgNsPath(ns, "mapel"), { kustom });
     return { status:"success", message:"Mapel kustom dihapus" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function tambahAsesmenKustom({ nama }) {
+export async function tambahAsesmenKustom({ nama }, ns = "") {
   try {
     const n = String(nama).trim();
     if (!n) return { status:"error", message:"Nama asesmen tidak boleh kosong" };
     if (DEFAULT_ASESMEN.includes(n)) return { status:"error", message:"Asesmen bawaan tidak bisa ditambahkan lagi" };
-    const doc = await fsGet("config/asesmen");
+    const doc = await fsGet(cfgNsPath(ns, "asesmen"));
     const kustom = doc?.kustom || [];
     if (kustom.includes(n)) return { status:"error", message:"Asesmen sudah ada" };
-    await fsPatch("config/asesmen", { kustom: [...kustom, n] });
+    await fsPatch(cfgNsPath(ns, "asesmen"), { kustom: [...kustom, n] });
     return { status:"success", message:"Asesmen kustom berhasil ditambahkan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function hapusAsesmenKustom({ nama }) {
+export async function hapusAsesmenKustom({ nama }, ns = "") {
   try {
     const n = String(nama).trim();
     if (DEFAULT_ASESMEN.includes(n)) return { status:"error", message:"Asesmen bawaan tidak bisa dihapus" };
-    const doc = await fsGet("config/asesmen");
+    const doc = await fsGet(cfgNsPath(ns, "asesmen"));
     const kustom = (doc?.kustom || []).filter(a => a !== n);
-    await fsPatch("config/asesmen", { kustom });
+    await fsPatch(cfgNsPath(ns, "asesmen"), { kustom });
     return { status:"success", message:"Asesmen kustom dihapus" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// KKM
+// KKM — per kelas (ns)
 // ================================================================
-export async function getKKM() {
+export async function getKKM(ns = "") {
   try {
-    const doc = await fsGet("config/kkm");
+    const doc = await fsGet(cfgNsPath(ns, "kkm"));
     return { status:"success", data: doc ? { ...doc } : {} };
   } catch(e) { return { status:"success", data:{} }; }
 }
-
-export async function simpanKKM({ kkm }) {
+export async function simpanKKM({ kkm }, ns = "") {
   try {
     const payload = {};
     for (const [mapel, nilai] of Object.entries(kkm || {})) {
       if (mapel && !isNaN(nilai)) payload[mapel] = Number(nilai);
     }
-    // Hapus field id jika ada
     delete payload.id;
-    await fsPatch("config/kkm", payload);
+    await fsPatch(cfgNsPath(ns, "kkm"), payload);
     return { status:"success", message:"KKM berhasil disimpan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// SISWA
+// SISWA — per kelas (ns)
 // ================================================================
-export async function getSiswa() {
+export async function getSiswa(ns = "") {
   try {
-    const docs = await fsList("siswa");
+    const docs = await fsList(col(ns, "siswa"));
     return { status:"success", data: docs.map(d => ({ nisn:d.nisn||d.id, nama:d.nama||"", kelas:d.kelas||"" })) };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function getSiswaByNISN({ nisn }) {
+export async function getSiswaByNISN({ nisn }, ns = "") {
   try {
     const n = String(nisn).trim();
-    const doc = await fsGet(`siswa/${n}`);
+    const doc = await fsGet(`${col(ns, "siswa")}/${n}`);
     if (!doc) return { status:"error", message:"NISN tidak ditemukan" };
     return { status:"success", data:{ nisn: doc.nisn||n, nama: doc.nama||"", kelas: doc.kelas||"" } };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function tambahSiswa({ nisn, nama, kelas }) {
+export async function tambahSiswa({ nisn, nama, kelas }, ns = "") {
   try {
     const n = String(nisn).trim();
-    const existing = await fsGet(`siswa/${n}`);
+    const existing = await fsGet(`${col(ns, "siswa")}/${n}`);
     if (existing) return { status:"error", message:"NISN sudah terdaftar!" };
-    await fsPatch(`siswa/${n}`, {
+    await fsPatch(`${col(ns, "siswa")}/${n}`, {
       nisn: n,
       nama: String(nama).trim(),
       kelas: String(kelas).trim(),
@@ -348,24 +358,19 @@ export async function tambahSiswa({ nisn, nama, kelas }) {
     return { status:"success", message:"Siswa berhasil ditambahkan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function hapusSiswa({ nisn }) {
+export async function hapusSiswa({ nisn }, ns = "") {
   try {
-    await fsDelete(`siswa/${String(nisn).trim()}`);
+    await fsDelete(`${col(ns, "siswa")}/${String(nisn).trim()}`);
     return { status:"success", message:"Siswa berhasil dihapus" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// TOKEN
+// TOKEN — per kelas (ns)
 // ================================================================
-function tokenDocId(mapel, asesmen) {
-  return `${mapel}__${asesmen}`.replace(/[^a-zA-Z0-9_\-]/g, "_");
-}
-
-export async function validasiToken({ mapel, asesmen, token }) {
+export async function validasiToken({ mapel, asesmen, token }, ns = "") {
   try {
-    const doc = await fsGet(`token/${tokenDocId(mapel, asesmen)}`);
+    const doc = await fsGet(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`);
     if (!doc) return { status:"error", message:"Token tidak ditemukan." };
     if (doc.token?.toUpperCase() !== String(token).toUpperCase())
       return { status:"error", message:"Token tidak sesuai." };
@@ -374,60 +379,52 @@ export async function validasiToken({ mapel, asesmen, token }) {
     return { status:"success", aktif:"TRUE", message:"Token valid dan aktif." };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function getDaftarToken() {
+export async function getDaftarToken(ns = "") {
   try {
-    const docs = await fsList("token");
+    const docs = await fsList(col(ns, "token"));
     return {
       status:"success",
       data: docs.map(d => ({ mapel:d.mapel||"", asesmen:d.asesmen||"", token:d.token||"", aktif:d.aktif||"FALSE" }))
     };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function simpanToken({ mapel, asesmen, token }) {
+export async function simpanToken({ mapel, asesmen, token }, ns = "") {
   try {
-    await fsPatch(`token/${tokenDocId(mapel, asesmen)}`, {
+    await fsPatch(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`, {
       mapel, asesmen, token: String(token).toUpperCase(), aktif:"TRUE"
     });
     return { status:"success", message:"Token disimpan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function updateTokenStatus({ mapel, asesmen, token, status }) {
+export async function updateTokenStatus({ mapel, asesmen, token, status }, ns = "") {
   try {
-    const doc = await fsGet(`token/${tokenDocId(mapel, asesmen)}`);
+    const doc = await fsGet(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`);
     if (!doc) return { status:"error", message:"Token tidak ditemukan." };
-    await fsPatch(`token/${tokenDocId(mapel, asesmen)}`, { aktif: String(status).toUpperCase() }, ["aktif"]);
+    await fsPatch(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`, { aktif: String(status).toUpperCase() }, ["aktif"]);
     return { status:"success", aktif: String(status).toUpperCase(), message:`Token berhasil di${status==="TRUE"?"aktifkan":"nonaktifkan"}.` };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function editToken({ mapel, asesmen, tokenLama, tokenBaru }) {
+export async function editToken({ mapel, asesmen, tokenLama, tokenBaru }, ns = "") {
   try {
-    const doc = await fsGet(`token/${tokenDocId(mapel, asesmen)}`);
+    const doc = await fsGet(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`);
     if (!doc) return { status:"error", message:"Token tidak ditemukan." };
     if (doc.token?.toUpperCase() !== String(tokenLama).toUpperCase())
       return { status:"error", message:"Token lama tidak sesuai." };
-    await fsPatch(`token/${tokenDocId(mapel, asesmen)}`, { token: String(tokenBaru).toUpperCase() }, ["token"]);
+    await fsPatch(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`, { token: String(tokenBaru).toUpperCase() }, ["token"]);
     return { status:"success", message:"Token berhasil diubah." };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// SOAL
+// SOAL — per kelas (ns)
 // ================================================================
-export async function getSoal({ mapel, asesmen, token }) {
+export async function getSoal({ mapel, asesmen, token }, ns = "") {
   try {
-    // Validasi token dulu
-    const validasi = await validasiToken({ mapel, asesmen, token });
+    const validasi = await validasiToken({ mapel, asesmen, token }, ns);
     if (validasi.status !== "success") return validasi;
-
-    const col = soalCollectionId(mapel, asesmen);
-    const soalList = await fsList(col);
+    const colId = soalCollectionId(ns, mapel, asesmen);
+    const soalList = await fsList(colId);
     if (soalList.length === 0) return { status:"error", message:`Belum ada soal untuk ${mapel} - ${asesmen}.` };
-
-    // Acak objektif, uraian di belakang
     const obj = soalList.filter(s => s.jenisSoal !== "Uraian/Esai");
     const urai = soalList.filter(s => s.jenisSoal === "Uraian/Esai");
     for (let i = obj.length-1; i > 0; i--) {
@@ -437,20 +434,18 @@ export async function getSoal({ mapel, asesmen, token }) {
     return { status:"success", soal:[...obj, ...urai] };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function getSoalGuru({ mapel, asesmen }) {
+export async function getSoalGuru({ mapel, asesmen }, ns = "") {
   try {
-    const col = soalCollectionId(mapel, asesmen);
-    const soalList = await fsList(col);
+    const colId = soalCollectionId(ns, mapel, asesmen);
+    const soalList = await fsList(colId);
     return { status:"success", soal: soalList };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function tambahSoal({ mapel, asesmen, soal, gambar, jenisSoal, opsi, jawabanBenar, point, jawabanReferensi }) {
+export async function tambahSoal({ mapel, asesmen, soal, gambar, jenisSoal, opsi, jawabanBenar, point, jawabanReferensi }, ns = "") {
   try {
-    const col = soalCollectionId(mapel, asesmen);
+    const colId = soalCollectionId(ns, mapel, asesmen);
     const id = genId();
-    await fsPatch(`${col}/${id}`, {
+    await fsPatch(`${colId}/${id}`, {
       id, soal, gambar:gambar||"", jenisSoal, opsi:opsi||"[]",
       jawabanBenar:jawabanBenar||"[]", point:Number(point)||0,
       jawabanReferensi:jawabanReferensi||"", mapel, asesmen,
@@ -458,11 +453,10 @@ export async function tambahSoal({ mapel, asesmen, soal, gambar, jenisSoal, opsi
     return { status:"success", message:"Soal berhasil disimpan", id };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function editSoal({ id, mapel, asesmen, soal, gambar, jenisSoal, opsi, jawabanBenar, point, jawabanReferensi }) {
+export async function editSoal({ id, mapel, asesmen, soal, gambar, jenisSoal, opsi, jawabanBenar, point, jawabanReferensi }, ns = "") {
   try {
-    const col = soalCollectionId(mapel, asesmen);
-    await fsPatch(`${col}/${id}`, {
+    const colId = soalCollectionId(ns, mapel, asesmen);
+    await fsPatch(`${colId}/${id}`, {
       soal, gambar:gambar||"", jenisSoal,
       opsi:opsi||"[]", jawabanBenar:jawabanBenar||"[]",
       point:Number(point)||0, jawabanReferensi:jawabanReferensi||"",
@@ -470,78 +464,57 @@ export async function editSoal({ id, mapel, asesmen, soal, gambar, jenisSoal, op
     return { status:"success", message:"Soal berhasil diperbarui." };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function hapusSoal({ id, mapel, asesmen }) {
+export async function hapusSoal({ id, mapel, asesmen }, ns = "") {
   try {
-    const col = soalCollectionId(mapel, asesmen);
-    await fsDelete(`${col}/${id}`);
+    const colId = soalCollectionId(ns, mapel, asesmen);
+    await fsDelete(`${colId}/${id}`);
     return { status:"success", message:"Soal berhasil dihapus." };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 
 // ================================================================
-// HASIL UJIAN
+// HASIL UJIAN — per kelas (ns)
 // ================================================================
-
-/** ID unik per sesi ujian siswa */
-function hasilDocId(nisn, mapel, asesmen, waktu) {
-  const safe = (s) => String(s).replace(/[^a-zA-Z0-9]/g,"_");
-  return `${safe(nisn)}_${safe(mapel)}_${safe(asesmen)}_${safe(waktu)}`.substring(0,200);
-}
-
-export async function simpanHasil(p) {
+export async function simpanHasil(p, ns = "") {
   try {
     const waktu = p.waktu || new Date().toLocaleString("id-ID");
     const adaEsai = p.adaEsai === true || p.adaEsai === "true";
     const docId = hasilDocId(p.nisn, p.mapel, p.asesmen, waktu);
-
     const payload = {
-      nama          : p.nama||"",
-      nisn          : String(p.nisn||""),
-      noAbsen       : String(p.noAbsen||""),
-      mapel         : p.mapel||"",
-      asesmen       : p.asesmen||"",
-      skorObjektif  : Number(p.nilai||0),
-      skorEsai      : "",
-      nilaiAkhir    : adaEsai ? "" : Number(p.nilai||0),
-      token         : p.token||"",
-      waktu,
-      adaEsai       : adaEsai ? "TRUE" : "FALSE",
-      jawabanEsai   : p.jawabanEsai||"",
-      detailSkorEsai: "",
+      nama:p.nama||"", nisn:String(p.nisn||""), noAbsen:String(p.noAbsen||""),
+      mapel:p.mapel||"", asesmen:p.asesmen||"",
+      skorObjektif:Number(p.nilai||0), skorEsai:"",
+      nilaiAkhir: adaEsai ? "" : Number(p.nilai||0),
+      token:p.token||"", waktu, adaEsai: adaEsai?"TRUE":"FALSE",
+      jawabanEsai:p.jawabanEsai||"", detailSkorEsai:"",
     };
-
-    await fsPatch(`hasil/${docId}`, payload);
+    await fsPatch(`${col(ns, "hasil")}/${docId}`, payload);
     return { status:"success", message:"Hasil berhasil disimpan" };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function getHasilPerMapel({ mapel }) {
+export async function getHasilPerMapel({ mapel }, ns = "") {
   try {
-    const docs = await fsQuery("hasil", [{ field:"mapel", value: mapel }]);
+    const docs = await fsQuery(col(ns, "hasil"), [{ field:"mapel", value: mapel }]);
     return { status:"success", data: docs };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function getHasil() {
+export async function getHasil(ns = "") {
   try {
-    const docs = await fsList("hasil");
+    const docs = await fsList(col(ns, "hasil"));
     return { status:"success", data: docs };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function hapusHasil({ nisn, mapel, asesmen, waktu }) {
+export async function hapusHasil({ nisn, mapel, asesmen, waktu }, ns = "") {
   try {
     const docId = hasilDocId(nisn, mapel, asesmen, waktu);
-    await fsDelete(`hasil/${docId}`);
+    await fsDelete(`${col(ns, "hasil")}/${docId}`);
     return { status:"success", message:"Data hasil berhasil dihapus." };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-export async function simpanKoreksiEsai({ nisn, mapel, asesmen, waktu, skorEsai, detailSkorEsai }) {
+export async function simpanKoreksiEsai({ nisn, mapel, asesmen, waktu, skorEsai, detailSkorEsai }, ns = "") {
   try {
     const docId = hasilDocId(nisn, mapel, asesmen, waktu);
-    await fsPatch(`hasil/${docId}`, {
+    await fsPatch(`${col(ns, "hasil")}/${docId}`, {
       skorEsai: Number(skorEsai||0),
       detailSkorEsai: detailSkorEsai||"",
     }, ["skorEsai","detailSkorEsai"]);
@@ -550,27 +523,23 @@ export async function simpanKoreksiEsai({ nisn, mapel, asesmen, waktu, skorEsai,
 }
 
 // ================================================================
-// STATISTIK
+// STATISTIK — per kelas (ns)
 // ================================================================
-export async function getStats() {
+export async function getStats(ns = "") {
   try {
     const [siswa, hasil] = await Promise.all([
-      fsList("siswa"),
-      fsList("hasil"),
+      fsList(col(ns, "siswa")),
+      fsList(col(ns, "hasil")),
     ]);
-    // Hitung soal: list semua koleksi tidak bisa lewat REST biasa,
-    // simpan counter di config/stats dan update tiap tambahSoal
-    const statsDoc = await fsGet("config/stats");
+    const statsDoc = await fsGet(cfgNsPath(ns, "stats"));
     const jumlahSoal = statsDoc?.jumlahSoal || 0;
     return { status:"success", data:{ siswa:siswa.length, soal:jumlahSoal, hasil:hasil.length } };
   } catch(e) { return { status:"error", message:e.message }; }
 }
-
-/** Panggil ini setelah tambahSoal / hapusSoal untuk update counter */
-export async function updateSoalCounter(delta) {
+export async function updateSoalCounter(delta, ns = "") {
   try {
-    const doc = await fsGet("config/stats");
+    const doc = await fsGet(cfgNsPath(ns, "stats"));
     const cur = doc?.jumlahSoal || 0;
-    await fsPatch("config/stats", { jumlahSoal: Math.max(0, cur + delta) });
+    await fsPatch(cfgNsPath(ns, "stats"), { jumlahSoal: Math.max(0, cur + delta) });
   } catch {}
 }
