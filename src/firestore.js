@@ -432,13 +432,19 @@ export async function getSoal({ mapel, asesmen, token }, ns = "") {
     const colId = soalCollectionId(ns, mapel, asesmen);
     const soalList = await fsList(colId);
     if (soalList.length === 0) return { status:"error", message:`Belum ada soal untuk ${mapel} - ${asesmen}.` };
-    const obj = soalList.filter(s => s.jenisSoal !== "Uraian/Esai");
-    const urai = soalList.filter(s => s.jenisSoal === "Uraian/Esai");
-    for (let i = obj.length-1; i > 0; i--) {
-      const j = Math.floor(Math.random()*(i+1));
-      [obj[i], obj[j]] = [obj[j], obj[i]];
+
+    // Pisahkan objektif dan uraian
+    const objektif = soalList.filter(s => s.jenisSoal !== "Uraian/Esai");
+    const urai     = soalList.filter(s => s.jenisSoal === "Uraian/Esai");
+
+    // Acak semua soal objektif (PG, PG Kompleks, Benar/Salah) sekaligus
+    for (let i = objektif.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [objektif[i], objektif[j]] = [objektif[j], objektif[i]];
     }
-    return { status:"success", soal:[...obj, ...urai] };
+
+    // Uraian tidak diacak, selalu di akhir
+    return { status:"success", soal:[...objektif, ...urai] };
   } catch(e) { return { status:"error", message:e.message }; }
 }
 export async function getSoalGuru({ mapel, asesmen }, ns = "") {

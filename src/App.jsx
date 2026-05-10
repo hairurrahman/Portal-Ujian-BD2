@@ -968,6 +968,59 @@ function TabSiswa({ scriptUrl, addToast, ns="" }) {
 // MANAJEMEN MAPEL & ASESMEN (dengan toggle switch token, edit token)
 // ============================================================
 function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, setAsesmenList, ns="" }) {
+  // State Copy Soal
+  const [showCopySoal, setShowCopySoal] = useState(false);
+  const [copySumber, setCopySumber] = useState({ mapel: "", asesmen: "" });
+  const [copyTujuan, setCopyTujuan] = useState({ mapel: "", asesmen: "" });
+  const [copyLoading, setCopyLoading] = useState(false);
+  const [copyProgress, setCopyProgress] = useState({ total: 0, done: 0 });
+
+  const handleCopySoal = async () => {
+    if (!copySumber.mapel || !copySumber.asesmen) return addToast("Pilih mapel & asesmen sumber!", "error");
+    if (!copyTujuan.mapel || !copyTujuan.asesmen) return addToast("Pilih mapel & asesmen tujuan!", "error");
+    if (copySumber.mapel === copyTujuan.mapel && copySumber.asesmen === copyTujuan.asesmen)
+      return addToast("Sumber dan tujuan tidak boleh sama!", "error");
+
+    setCopyLoading(true);
+    setCopyProgress({ total: 0, done: 0 });
+    try {
+      // Ambil semua soal dari sumber
+      const res = await FS.getSoalGuru({ mapel: copySumber.mapel, asesmen: copySumber.asesmen }, ns);
+      if (res.status !== "success" || !res.soal?.length) {
+        addToast("Tidak ada soal di sumber yang dipilih!", "error");
+        setCopyLoading(false); return;
+      }
+      const soalList = res.soal;
+      setCopyProgress({ total: soalList.length, done: 0 });
+
+      // Copy satu per satu ke tujuan
+      let sukses = 0, gagal = 0;
+      for (const s of soalList) {
+        try {
+          const d = await FS.tambahSoal({
+            mapel: copyTujuan.mapel,
+            asesmen: copyTujuan.asesmen,
+            soal: s.soal || "",
+            gambar: s.gambar || "",
+            jenisSoal: s.jenisSoal || "Pilihan Ganda",
+            opsi: s.opsi || "[]",
+            jawabanBenar: s.jawabanBenar || "[]",
+            point: Number(s.point) || 0,
+            jawabanReferensi: s.jawabanReferensi || "",
+          }, ns);
+          if (d.status === "success") { sukses++; FS.updateSoalCounter(1, ns); }
+          else gagal++;
+        } catch { gagal++; }
+        setCopyProgress(p => ({ ...p, done: p.done + 1 }));
+      }
+      addToast(`✅ Copy selesai: ${sukses} soal berhasil, ${gagal} gagal.`, sukses > 0 ? "success" : "error");
+      if (sukses > 0) setShowCopySoal(false);
+    } catch (e) {
+      addToast("Gagal: " + e.message, "error");
+    } finally {
+      setCopyLoading(false);
+    }
+  };
   const [newMapel, setNewMapel] = useState("");
   const [newAsesmen, setNewAsesmen] = useState("");
   const [tokenMapel, setTokenMapel] = useState(mapelList[0] || "");
@@ -1275,6 +1328,101 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── COPY SOAL ── */}
+      <div className="bg-white p-5 space-y-4" style={{ border: "1px solid #e2e8f0", borderTop: "3px solid #7c3aed", borderRadius: "0" }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-bold uppercase tracking-wide text-sm" style={{ color: "#7c3aed" }}>📋 Copy Soal</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Salin semua soal (teks, gambar, jawaban) dari satu mapel/asesmen ke mapel/asesmen lain.</p>
+          </div>
+          <button onClick={() => setShowCopySoal(v => !v)} className="text-xs font-bold px-3 py-1.5"
+            style={{ background: showCopySoal ? "#f1f5f9" : "#7c3aed", color: showCopySoal ? "#475569" : "#fff", borderRadius: "0" }}>
+            {showCopySoal ? "✕ Tutup" : "📋 Buka"}
+          </button>
+        </div>
+
+        {showCopySoal && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Sumber */}
+              <div className="p-4 space-y-3" style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderLeft: "4px solid #CC0000", borderRadius: "0" }}>
+                <p className="font-bold text-sm" style={{ color: "#CC0000" }}>📖 Mapel Sumber (yang di-copy)</p>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Mata Pelajaran</label>
+                  <select value={copySumber.mapel} onChange={e => setCopySumber(s => ({ ...s, mapel: e.target.value, asesmen: "" }))} className={inp}>
+                    <option value="">-- Pilih Mapel --</option>
+                    {mapelList.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Asesmen</label>
+                  <select value={copySumber.asesmen} onChange={e => setCopySumber(s => ({ ...s, asesmen: e.target.value }))} className={inp} disabled={!copySumber.mapel}>
+                    <option value="">-- Pilih Asesmen --</option>
+                    {asesmenList.map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Tujuan */}
+              <div className="p-4 space-y-3" style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderLeft: "4px solid #003082", borderRadius: "0" }}>
+                <p className="font-bold text-sm" style={{ color: "#003082" }}>🎯 Mapel Tujuan (tempat copy)</p>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Mata Pelajaran</label>
+                  <select value={copyTujuan.mapel} onChange={e => setCopyTujuan(s => ({ ...s, mapel: e.target.value, asesmen: "" }))} className={inp}>
+                    <option value="">-- Pilih Mapel --</option>
+                    {mapelList.map(m => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Asesmen</label>
+                  <select value={copyTujuan.asesmen} onChange={e => setCopyTujuan(s => ({ ...s, asesmen: e.target.value }))} className={inp} disabled={!copyTujuan.mapel}>
+                    <option value="">-- Pilih Asesmen --</option>
+                    {asesmenList.map(a => <option key={a} value={a}>{a}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Panah indikator */}
+            {copySumber.mapel && copySumber.asesmen && copyTujuan.mapel && copyTujuan.asesmen && (
+              <div className="text-center text-sm font-bold py-2" style={{ color: "#7c3aed" }}>
+                📖 {copySumber.mapel} / {copySumber.asesmen}
+                <span className="mx-3">→</span>
+                🎯 {copyTujuan.mapel} / {copyTujuan.asesmen}
+              </div>
+            )}
+
+            {/* Progress bar saat copy */}
+            {copyLoading && copyProgress.total > 0 && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>Menyalin soal...</span>
+                  <span>{copyProgress.done}/{copyProgress.total}</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full" style={{ height: "8px" }}>
+                  <div className="rounded-full transition-all" style={{ height: "8px", background: "#7c3aed", width: `${Math.round((copyProgress.done / copyProgress.total) * 100)}%` }} />
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={handleCopySoal}
+              disabled={copyLoading || !copySumber.mapel || !copySumber.asesmen || !copyTujuan.mapel || !copyTujuan.asesmen}
+              className="w-full font-bold py-3 text-sm text-white disabled:opacity-50"
+              style={{ background: copyLoading ? "#6d28d9" : "#7c3aed", borderRadius: "0" }}>
+              {copyLoading ? `⏳ Menyalin... (${copyProgress.done}/${copyProgress.total})` : "📋 Mulai Copy Soal"}
+            </button>
+
+            <div className="p-3 text-xs" style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderLeft: "3px solid #7c3aed", borderRadius: "0" }}>
+              <p className="font-bold" style={{ color: "#6d28d9" }}>ℹ️ Catatan:</p>
+              <p className="text-slate-600">• Semua soal (teks, gambar, opsi, jawaban, point) akan disalin ke tujuan</p>
+              <p className="text-slate-600">• Soal di tujuan tidak dihapus — soal baru ditambahkan ke yang sudah ada</p>
+              <p className="text-slate-600">• Proses tidak bisa dibatalkan setelah dimulai</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Modal Edit Token */}
@@ -2657,10 +2805,19 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
     if (!modalKoreksi) return;
     setSavingKoreksi(true);
     try {
-      const totalEsai = Object.values(skorPerSoal).reduce((a,b) => a + (Number(b) || 0), 0);
-      const jumlahEsai = Object.keys(skorPerSoal).length;
+      // Skor guru: 1-10, konversi ke 0-100 untuk perhitungan nilai akhir
+      const nilaiPer100 = Object.fromEntries(
+        Object.entries(skorPerSoal).map(([k, v]) => [k, Math.round((Number(v) || 0) * 10)])
+      );
+      const totalEsai = Object.values(nilaiPer100).reduce((a,b) => a + b, 0);
+      const jumlahEsai = Object.keys(nilaiPer100).length;
       const rerataSkorEsai = jumlahEsai > 0 ? Math.round(totalEsai / jumlahEsai) : 0;
-      const d = await FS.simpanKoreksiEsai({ nisn:modalKoreksi.nisn, mapel:modalKoreksi.mapel, asesmen:modalKoreksi.asesmen, waktu:modalKoreksi.waktu, skorEsai:rerataSkorEsai, detailSkorEsai:JSON.stringify(skorPerSoal) }, ns);
+      const d = await FS.simpanKoreksiEsai({
+        nisn:modalKoreksi.nisn, mapel:modalKoreksi.mapel,
+        asesmen:modalKoreksi.asesmen, waktu:modalKoreksi.waktu,
+        skorEsai:rerataSkorEsai,
+        detailSkorEsai:JSON.stringify(skorPerSoal) // simpan skor asli 1-10
+      }, ns);
       if (d.status==="success") { addToast("Koreksi berhasil disimpan!", "success"); setModalKoreksi(null); setSkorPerSoal({}); fetchHasil(filterMapel); }
       else addToast(d.message||"Gagal","error");
     } catch { addToast("Gagal terhubung","error"); } finally { setSavingKoreksi(false); }
@@ -2755,12 +2912,59 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
                     <div className="space-y-3">
                       {jawabanEsaiList.map((je, idx) => (
                         <div key={idx} className="bg-white p-3 space-y-2" style={{ border: "1px solid #fcd34d", borderRadius: "0" }}>
-                          <p className="text-xs font-semibold text-slate-700">Soal {idx+1}: {je.soal}</p>
-                          {je.referensi && <p className="text-xs text-slate-400 italic">Referensi: {je.referensi}</p>}
-                          <p className="text-sm text-slate-800 p-2" style={{ background: "#fff7ed", borderRadius: "0" }}>{je.jawaban || "(tidak dijawab)"}</p>
-                          <div className="flex items-center gap-3">
-                            <label className="text-xs font-bold text-slate-600">Skor (0–100):</label>
-                            <input type="number" min={0} max={100} value={skorPerSoal[idx]??""} onChange={e=>setSkorPerSoal(p=>({...p,[idx]:e.target.value}))} className="w-20 border-2 border-amber-300 px-2 py-1 text-center font-bold text-amber-800" style={{ borderRadius: "0" }} />
+                          <div className="text-xs font-semibold text-slate-700 mb-1">
+                            <span className="font-black" style={{ color:"#b45309" }}>Soal {idx+1}:</span>
+                            <div
+                              className="mt-1 prose prose-sm max-w-none text-slate-700"
+                              style={{ lineHeight:"1.6" }}
+                              dangerouslySetInnerHTML={{ __html: je.soal || "" }}
+                            />
+                          </div>
+                          {je.referensi && (
+                            <div className="text-xs text-slate-500 italic p-2" style={{ background:"#f8fafc", borderLeft:"3px solid #94a3b8", borderRadius:"0" }}>
+                              <span className="font-bold not-italic">Kunci Jawaban:</span>
+                              <div dangerouslySetInnerHTML={{ __html: je.referensi }} />
+                            </div>
+                          )}
+                          <div className="text-sm text-slate-800 p-2 whitespace-pre-wrap" style={{ background: "#fff7ed", borderRadius: "0", minHeight:"40px" }}>{je.jawaban || <span className="text-slate-400 italic">(tidak dijawab)</span>}</div>
+                          <div className="space-y-2 pt-1">
+                            <div className="flex items-center justify-between">
+                              <label className="text-xs font-bold uppercase tracking-wide" style={{ color:"#b45309" }}>Nilai (1–10):</label>
+                              {skorPerSoal[idx] && (
+                                <span className="text-xs font-bold px-2 py-0.5" style={{ background:"#003082", color:"#fff", borderRadius:"0" }}>
+                                  = {Math.round(Number(skorPerSoal[idx]) * 10)} / 100
+                                </span>
+                              )}
+                            </div>
+                            {/* Tombol 1-10 */}
+                            <div className="flex gap-1 flex-wrap">
+                              {[1,2,3,4,5,6,7,8,9,10].map(n => {
+                                const aktif = Number(skorPerSoal[idx]) === n;
+                                const warna = n <= 4 ? "#CC0000" : n <= 6 ? "#d97706" : n <= 8 ? "#003082" : "#16a34a";
+                                return (
+                                  <button
+                                    key={n}
+                                    type="button"
+                                    onClick={() => setSkorPerSoal(p => ({ ...p, [idx]: n }))}
+                                    className="w-9 h-9 font-black text-sm transition-all"
+                                    style={{
+                                      background: aktif ? warna : "#f8fafc",
+                                      color: aktif ? "#fff" : warna,
+                                      border: `2px solid ${warna}`,
+                                      borderRadius: "0",
+                                      transform: aktif ? "scale(1.15)" : "scale(1)",
+                                    }}
+                                  >{n}</button>
+                                );
+                              })}
+                            </div>
+                            {/* Panduan warna */}
+                            <div className="flex gap-3 text-xs" style={{ color:"#94a3b8" }}>
+                              <span><span style={{ color:"#CC0000" }}>■</span> 1–4 Kurang</span>
+                              <span><span style={{ color:"#d97706" }}>■</span> 5–6 Cukup</span>
+                              <span><span style={{ color:"#003082" }}>■</span> 7–8 Baik</span>
+                              <span><span style={{ color:"#16a34a" }}>■</span> 9–10 Sempurna</span>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -2768,7 +2972,25 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
                   );
                 })()}
               </div>
-              <div className="flex gap-3"><button onClick={()=>{setModalKoreksi(null);setSkorPerSoal({});}} className={btn("slate") + " flex-1"}>Batal</button><button onClick={handleSimpanKoreksi} disabled={savingKoreksi} className={btn("green") + " flex-1"}>{savingKoreksi ? "Menyimpan..." : "✅ Simpan Koreksi"}</button></div>
+              {/* Ringkasan nilai esai */}
+              {Object.keys(skorPerSoal).length > 0 && (() => {
+                const nilaiPer100 = Object.values(skorPerSoal).map(v => Math.round(Number(v||0)*10));
+                const rata = Math.round(nilaiPer100.reduce((a,b)=>a+b,0) / nilaiPer100.length);
+                return (
+                  <div className="p-3 flex items-center justify-between" style={{ background:"#f0fdf4", border:"1px solid #86efac", borderLeft:"4px solid #16a34a", borderRadius:"0" }}>
+                    <div className="text-xs text-slate-600 space-y-0.5">
+                      <p className="font-bold" style={{ color:"#15803d" }}>📊 Ringkasan Nilai Esai</p>
+                      <p>Skor: {Object.values(skorPerSoal).join(" + ")} (skala 1–10)</p>
+                      <p>Konversi: {nilaiPer100.join(" + ")} (skala 100) → rata-rata <strong>{rata}</strong></p>
+                    </div>
+                    <div className="text-3xl font-black" style={{ color:"#15803d" }}>{rata}</div>
+                  </div>
+                );
+              })()}
+              <div className="flex gap-3">
+                <button onClick={()=>{setModalKoreksi(null);setSkorPerSoal({});}} className={btn("slate") + " flex-1"}>Batal</button>
+                <button onClick={handleSimpanKoreksi} disabled={savingKoreksi || Object.keys(skorPerSoal).length === 0} className={btn("green") + " flex-1"}>{savingKoreksi ? "Menyimpan..." : "✅ Simpan Koreksi"}</button>
+              </div>
             </div>
           </div>
         </div>
