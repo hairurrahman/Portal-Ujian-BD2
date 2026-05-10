@@ -404,6 +404,13 @@ export async function updateTokenStatus({ mapel, asesmen, token, status }, ns = 
     return { status:"success", aktif: String(status).toUpperCase(), message:`Token berhasil di${status==="TRUE"?"aktifkan":"nonaktifkan"}.` };
   } catch(e) { return { status:"error", message:e.message }; }
 }
+export async function hapusToken({ mapel, asesmen }, ns = "") {
+  try {
+    await fsDelete(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`);
+    return { status: "success", message: "Token berhasil dihapus." };
+  } catch(e) { return { status: "error", message: e.message }; }
+}
+
 export async function editToken({ mapel, asesmen, tokenLama, tokenBaru }, ns = "") {
   try {
     const doc = await fsGet(`${col(ns, "token")}/${tokenDocId(mapel, asesmen)}`);
@@ -542,4 +549,96 @@ export async function updateSoalCounter(delta, ns = "") {
     const cur = doc?.jumlahSoal || 0;
     await fsPatch(cfgNsPath(ns, "stats"), { jumlahSoal: Math.max(0, cur + delta) });
   } catch {}
+}
+
+// ================================================================
+// MANAJEMEN KELAS — disimpan di Firestore collection "admin_kelas"
+// Kelas 6 default selalu ada (namespace kosong, password guru123)
+// ================================================================
+
+const KELAS_DEFAULT_DOC = {
+  id        : "kelas6",
+  namaKelas : "Kelas 6",
+  tingkat   : "6",
+  password  : "guru123",
+  namespace : "",
+  isDefault : true,
+};
+
+export async function getKelasList() {
+  try {
+    const docs = await fsList("admin_kelas");
+    const list = docs.map(d => ({
+      id        : d.id,
+      namaKelas : d.namaKelas  || "",
+      tingkat   : d.tingkat    || "",
+      password  : d.password   || "",
+      namespace : (d.namespace !== undefined && d.namespace !== null) ? d.namespace : d.id + "_ns",
+      isDefault : d.isDefault  === true || d.isDefault === "true" || false,
+      createdAt : d.createdAt  || "",
+    }));
+    // Selalu pastikan kelas 6 ada
+    const adaDefault = list.some(k => k.isDefault);
+    if (!adaDefault) list.unshift(KELAS_DEFAULT_DOC);
+    // Urutkan: default dulu, lalu urut tingkat
+    list.sort((a, b) => (a.isDefault ? -1 : b.isDefault ? 1 : (a.tingkat||"9").localeCompare(b.tingkat||"9")));
+    return { status: "success", data: list };
+  } catch(e) {
+    // Fallback: minimal kembalikan kelas 6 default
+    return { status: "success", data: [KELAS_DEFAULT_DOC] };
+  }
+}
+
+export async function tambahKelas({ namaKelas, tingkat, password, namespace }) {
+  try {
+    const id = "kelas_" + Date.now();
+    const ns = namespace || id + "_ns";
+    await fsPatch(`admin_kelas/${id}`, {
+      id, namaKelas: String(namaKelas).trim(),
+      tingkat: String(tingkat || ""),
+      password: String(password).trim(),
+      namespace: ns,
+      isDefault: false,
+      createdAt: new Date().toISOString(),
+    });
+    return { status: "success", id, namespace: ns };
+  } catch(e) { return { status: "error", message: e.message }; }
+}
+
+export async function editKelas({ id, namaKelas, tingkat, password, isDefault }) {
+  try {
+    if (isDefault) {
+      // Kelas 6: hanya boleh update password
+      await fsPatch(`admin_kelas/${id}`, { password: String(password).trim() }, ["password"]);
+    } else {
+      await fsPatch(`admin_kelas/${id}`, {
+        namaKelas : String(namaKelas).trim(),
+        tingkat   : String(tingkat || ""),
+        password  : String(password).trim(),
+      }, ["namaKelas", "tingkat", "password"]);
+    }
+    return { status: "success" };
+  } catch(e) { return { status: "error", message: e.message }; }
+}
+
+export async function hapusKelas({ id }) {
+  try {
+    await fsDelete(`admin_kelas/${id}`);
+    return { status: "success" };
+  } catch(e) { return { status: "error", message: e.message }; }
+}
+
+// Pastikan kelas 6 default tersimpan di Firestore (dipanggil sekali saat AdminPanel mount)
+export async function ensureKelas6() {
+  try {
+    const existing = await fsGet("admin_kelas/kelas6");
+    if (!existing) {
+      await fsPatch("admin_kelas/kelas6", {
+        id: "kelas6", namaKelas: "Kelas 6", tingkat: "6",
+        password: "guru123", namespace: "", isDefault: true,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    return { status: "success" };
+  } catch(e) { return { status: "error", message: e.message }; }
 }

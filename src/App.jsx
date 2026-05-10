@@ -21,18 +21,23 @@ const TINGKAT_KELAS = ["1","2","3","4","5","6"];
 // Kelas 6 default — namespace "" agar collection path Firestore tidak berubah
 const KELAS_DEFAULT = { id:"kelas6", namaKelas:"Kelas 6", tingkat:"6", password:GURU_PASSWORD, namespace:"", isDefault:true };
 
-function loadKelasList() {
+// loadKelasList: baca dari localStorage sebagai cache cepat
+function loadKelasListCache() {
   try {
     const d = JSON.parse(localStorage.getItem("adminKelasList") || "null");
     if (Array.isArray(d) && d.length > 0) return d;
   } catch {}
   return [KELAS_DEFAULT];
 }
-function saveKelasList(list) { try { localStorage.setItem("adminKelasList", JSON.stringify(list)); } catch {} }
+function saveKelasListCache(list) {
+  try { localStorage.setItem("adminKelasList", JSON.stringify(list)); } catch {}
+}
 
+// cariKelasByPassword: cek cache localStorage dulu (cepat)
+// Firestore akan di-sync di AdminPanel & saat App mount
 function cariKelasByPassword(pwd) {
   if (!pwd) return null;
-  return loadKelasList().find(k => k.password === pwd) || null;
+  return loadKelasListCache().find(k => k.password === pwd) || null;
 }
 
 // ============================================================
@@ -671,14 +676,37 @@ async function simpanKKTP(interval, ns="") {
 function TabDashboard({ onNav, addToast, settings, ns="" }) {
   const [stats, setStats] = useState({ siswa:0, soal:0, hasil:0 });
   const [loadingStats, setLoadingStats] = useState(false);
-  
+  const [rekapToken, setRekapToken] = useState([]);  // [{mapel, asesmen, jumlahSoal}]
+  const [loadingRekap, setLoadingRekap] = useState(false);
+
   useEffect(() => {
     setLoadingStats(true);
     FS.getStats(ns)
       .then(d => { if(d.status==="success") setStats(d.data); })
       .catch(()=>{})
       .finally(()=>setLoadingStats(false));
-  }, []);
+
+    // Load rekap soal per mapel & asesmen dari daftar token
+    setLoadingRekap(true);
+    FS.getDaftarToken(ns).then(async d => {
+      if (d.status !== "success" || !d.data?.length) return;
+      // Hitung jumlah soal per token secara paralel
+      const items = await Promise.all(d.data.map(async t => {
+        try {
+          const s = await FS.getSoalGuru({ mapel: t.mapel, asesmen: t.asesmen }, ns);
+          return { mapel: t.mapel, asesmen: t.asesmen, jumlahSoal: s.soal?.length || 0, aktif: t.aktif };
+        } catch { return { mapel: t.mapel, asesmen: t.asesmen, jumlahSoal: 0, aktif: t.aktif }; }
+      }));
+      setRekapToken(items);
+    }).catch(()=>{}).finally(()=>setLoadingRekap(false));
+  }, [ns]);
+
+  // Kelompokkan per mapel
+  const rekapPerMapel = rekapToken.reduce((acc, item) => {
+    if (!acc[item.mapel]) acc[item.mapel] = [];
+    acc[item.mapel].push(item);
+    return acc;
+  }, {});
 
   const aksiCepat = [
     { icon:"✏️", label:"Buat Soal Baru", page:"soal", color:"bg-blue-700 hover:bg-blue-800" },
@@ -742,6 +770,47 @@ function TabDashboard({ onNav, addToast, settings, ns="" }) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Rekap Soal per Mapel & Asesmen */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold uppercase tracking-widest" style={{ color: "#003082" }}>📚 Rekap Soal per Mapel</h3>
+          {loadingRekap && <span className="text-xs text-slate-400">⏳ Memuat...</span>}
+        </div>
+        {!loadingRekap && Object.keys(rekapPerMapel).length === 0 ? (
+          <div className="p-4 text-xs text-center text-slate-400" style={{ border:"1px dashed #cbd5e1", borderRadius:"0" }}>
+            Belum ada soal. Tambahkan token & soal di menu <strong>Manajemen Mapel</strong> dan <strong>Input Soal</strong>.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {Object.entries(rekapPerMapel).map(([mapel, asesmen_list]) => (
+              <div key={mapel} style={{ border:"1px solid #e2e8f0", borderLeft:"4px solid #003082", borderRadius:"0", background:"#fff" }}>
+                <div className="px-4 py-2 flex items-center justify-between" style={{ borderBottom:"1px solid #f1f5f9", background:"#eff6ff" }}>
+                  <p className="font-black text-sm" style={{ color:"#003082" }}>📖 {mapel}</p>
+                  <span className="text-xs font-bold px-2 py-0.5" style={{ background:"#003082", color:"#fff", borderRadius:"0" }}>
+                    {asesmen_list.reduce((sum,a)=>sum+a.jumlahSoal,0)} soal
+                  </span>
+                </div>
+                <div className="divide-y divide-slate-50">
+                  {asesmen_list.map((a, i) => (
+                    <div key={i} className="px-4 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">{a.asesmen}</span>
+                        <span className="text-xs font-bold px-1.5 py-0.5" style={{ background: a.aktif==="TRUE"?"#f0fdf4":"#f1f5f9", color: a.aktif==="TRUE"?"#15803d":"#94a3b8", borderRadius:"0", border:`1px solid ${a.aktif==="TRUE"?"#86efac":"#cbd5e1"}` }}>
+                          {a.aktif==="TRUE"?"Aktif":"Nonaktif"}
+                        </span>
+                      </div>
+                      <span className="text-xs font-bold" style={{ color: a.jumlahSoal>0?"#003082":"#94a3b8" }}>
+                        {a.jumlahSoal} soal
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Info */}
@@ -1012,6 +1081,15 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
   };
 
   // Update status token (aktif/nonaktif)
+  const handleHapusToken = async (mapel, asesmen) => {
+    if (!window.confirm(`Hapus token untuk ${mapel} - ${asesmen}?`)) return;
+    try {
+      const d = await FS.hapusToken({ mapel, asesmen }, ns);
+      if (d.status === "success") { addToast("Token dihapus! ✅", "success"); fetchToken(); }
+      else addToast(d.message || "Gagal hapus token", "error");
+    } catch { addToast("Gagal hapus token", "error"); }
+  };
+
   const handleToggleStatus = async (mapel, asesmen, token, currentStatus) => {
     // Optimistic UI update dulu
     setDaftarToken(prev => prev.map(t =>
@@ -1113,7 +1191,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
       <div className="bg-white p-5 space-y-4" style={{ border: "1px solid #e2e8f0", borderTop: "3px solid #16a34a", borderRadius: "0" }}>
         <div>
           <h3 className="font-bold uppercase tracking-wide text-sm" style={{ color: "#15803d" }}>🎯 Kriteria Ketercapaian Tujuan Pembelajaran (KKTP)</h3>
-          <p className="text-xs text-slate-500 mt-1">Atur batas atas setiap level — berlaku untuk <strong>semua mata pelajaran</strong>. Nilai di atas batas tertinggi = Mahir.</p>
+          <p className="text-xs text-slate-500 mt-1">Atur batas atas setiap level &mdash; berlaku untuk <strong>semua mata pelajaran</strong>. Nilai di atas batas tertinggi = Mahir.</p>
         </div>
         {kktpLoading ? <p className="text-xs text-slate-400">Memuat KKTP...</p> : (
           <div className="space-y-3">
@@ -1148,8 +1226,9 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
               ))}
             </div>
             <div className="text-xs text-slate-400 bg-slate-50 px-3 py-2" style={{ borderLeft: "3px solid #16a34a" }}>
-              <strong>Mahir:</strong> {kktp.ck + 1} – 100 &nbsp;|&nbsp; Pastikan nilai berurutan: Perlu Bimbingan &lt; Berkembang &lt; Cakap.
+              <strong>Mahir:</strong> {kktp.ck + 1} &ndash; 100 &nbsp;|&nbsp; Pastikan nilai berurutan: Perlu Bimbingan &lt; Berkembang &lt; Cakap.
             </div>
+            )}
           </div>
         )}
         <button onClick={handleSaveKKTP} disabled={kktpSaving} className={btn("green") + " w-full md:w-auto"}>{kktpSaving ? "Menyimpan..." : "💾 Simpan KKTP"}</button>
@@ -1172,7 +1251,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
           {loadToken ? <p className="text-xs text-slate-400">Memuat...</p> : daftarToken.length === 0 ? <p className="text-xs text-slate-400">Belum ada token</p> : (
             <div className="overflow-x-auto" style={{ border: "1px solid #e2e8f0", borderRadius: "0" }}>
               <table className="w-full text-xs">
-                <thead><tr style={{ background: "#003082" }} className="text-white"><th className="px-3 py-2 text-left">Mapel</th><th className="px-3 py-2 text-left">Asesmen</th><th className="px-3 py-2 text-left">Token</th><th className="px-3 py-2 text-center">Status</th><th className="px-3 py-2 text-center">Aksi</th></tr></thead>
+                <thead><tr style={{ background: "#003082" }} className="text-white"><th className="px-3 py-2 text-left">Mapel</th><th className="px-3 py-2 text-left">Asesmen</th><th className="px-3 py-2 text-left">Token</th><th className="px-3 py-2 text-center">Status</th><th className="px-3 py-2 text-center">Edit</th><th className="px-3 py-2 text-center">Hapus</th></tr></thead>
                 <tbody>{daftarToken.map((t, i) => (
                   <tr key={i} style={{ background: i%2===0 ? "#fff" : "#f8fafc" }}>
                     <td className="px-3 py-2">{t.mapel}</td>
@@ -1185,7 +1264,10 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
                       <span className="ml-2 text-xs font-medium">{t.aktif === "TRUE" ? "Aktif" : "Nonaktif"}</span>
                     </td>
                     <td className="px-3 py-2 text-center">
-                      <button onClick={() => openEditModal(t)} className="text-xs font-medium px-2 py-1" style={{ color: "#003082" }}>✏️ Edit</button>
+                      <button onClick={() => openEditModal(t)} className="text-xs font-bold px-2 py-1" style={{ background:"#eff6ff", color:"#003082", borderRadius:"0" }}>✏️</button>
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <button onClick={() => handleHapusToken(t.mapel, t.asesmen)} className="text-xs font-bold px-2 py-1" style={{ background:"#fef2f2", color:"#CC0000", borderRadius:"0" }}>🗑️</button>
                     </td>
                   </tr>
                 ))}</tbody>
@@ -1244,10 +1326,17 @@ function RichTextEditor({ value, onChange, placeholder = "Tulis soal di sini..."
 
   // Inisialisasi editor saat mount
   useEffect(() => {
-    if (editorRef.current && editorRef.current.innerHTML !== value) {
+    if (editorRef.current) {
       editorRef.current.innerHTML = value || "";
     }
   }, []);
+
+  // Reset konten editor saat value dikosongkan dari luar (setelah simpan soal)
+  useEffect(() => {
+    if (!value && editorRef.current && editorRef.current.innerHTML !== "") {
+      editorRef.current.innerHTML = "";
+    }
+  }, [value]);
 
   const handleInput = () => {
     if (editorRef.current) {
@@ -1571,6 +1660,16 @@ function ImageInserter({ gambar, setGambar, addToast }) {
   const [compressing, setCompressing] = useState(false);
   const [preview, setPreview] = useState(gambar || null);
   const fileRef = useRef(null);
+
+  // Reset state internal saat parent mengosongkan gambar (setelah simpan soal)
+  useEffect(() => {
+    if (!gambar) {
+      setPreview(null);
+      setUrlInput("");
+      setMode(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }, [gambar]);
 
   // Kompresi gambar ke WebP ≤ targetKB
   const compressToWebP = (file, targetKB = 200) => new Promise((resolve, reject) => {
@@ -2981,7 +3080,8 @@ function AdminLogin({ onLogin, onBack }) {
 // ADMIN PANEL — Manajemen Kelas + Pengaturan
 // ============================================================
 function AdminPanel({ addToast, onLogout }) {
-  const [kelasList, setKelasListState] = useState(() => loadKelasList());
+  const [kelasList, setKelasListState] = useState(() => loadKelasListCache());
+  const [loadingKelas, setLoadingKelas] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState({ namaKelas:"", tingkat:"", password:"", isDefault:false });
@@ -2991,33 +3091,50 @@ function AdminPanel({ addToast, onLogout }) {
   const [pwdLama, setPwdLama] = useState("");
   const [pwdBaru, setPwdBaru] = useState("");
   const [pwdKonfirm, setPwdKonfirm] = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const saveList = (list) => { setKelasListState(list); saveKelasList(list); };
-  const resetForm = () => { setForm({ namaKelas:"", tingkat:"", password:"", isDefault:false }); setEditId(null); setShowForm(false); };
   const getAdminPwd = () => { try { return localStorage.getItem("adminPwd") || ADMIN_PASSWORD; } catch { return ADMIN_PASSWORD; } };
+  const resetForm = () => { setForm({ namaKelas:"", tingkat:"", password:"", isDefault:false }); setEditId(null); setShowForm(false); };
 
-  const handleSimpan = () => {
-    if (!form.namaKelas.trim()) return addToast("Nama kelas harus diisi!", "error");
+  // Load kelas dari Firestore saat AdminPanel mount
+  const fetchKelas = async () => {
+    setLoadingKelas(true);
+    try {
+      await FS.ensureKelas6(); // pastikan kelas 6 ada di Firestore
+      const res = await FS.getKelasList();
+      if (res.status === "success") {
+        setKelasListState(res.data);
+        saveKelasListCache(res.data); // sync cache
+      }
+    } catch(e) { addToast("Gagal load kelas dari Firestore", "warning"); }
+    finally { setLoadingKelas(false); }
+  };
+  useEffect(() => { fetchKelas(); }, []);
+
+  const handleSimpan = async () => {
+    if (!form.namaKelas.trim() && !form.isDefault) return addToast("Nama kelas harus diisi!", "error");
     if (!form.password.trim()) return addToast("Password kelas harus diisi!", "error");
     if (form.password.trim() === getAdminPwd()) return addToast("Password tidak boleh sama dengan password admin!", "error");
     const dupPwd = kelasList.find(k => k.password === form.password.trim() && k.id !== editId);
     if (dupPwd) return addToast(`Password sudah dipakai kelas lain (${dupPwd.namaKelas})!`, "error");
     if (!editId && kelasList.some(k => k.namaKelas.toLowerCase() === form.namaKelas.trim().toLowerCase())) return addToast("Nama kelas sudah ada!", "error");
 
-    if (editId) {
-      const kelasTarget = kelasList.find(k => k.id === editId);
-      const updated = kelasTarget?.isDefault
-        // Kelas 6 default: hanya password yang boleh diubah
-        ? kelasList.map(k => k.id === editId ? { ...k, password:form.password.trim() } : k)
-        : kelasList.map(k => k.id === editId ? { ...k, namaKelas:form.namaKelas.trim(), tingkat:form.tingkat, password:form.password.trim() } : k);
-      saveList(updated);
-      addToast("Kelas berhasil diperbarui! ✅", "success");
-    } else {
-      const id = "kelas_" + Date.now();
-      saveList([...kelasList, { id, namaKelas:form.namaKelas.trim(), tingkat:form.tingkat, password:form.password.trim(), namespace:id+"_ns", isDefault:false, createdAt:new Date().toISOString() }]);
-      addToast("Kelas berhasil ditambahkan! ✅", "success");
-    }
-    resetForm();
+    setSaving(true);
+    try {
+      if (editId) {
+        const kelasTarget = kelasList.find(k => k.id === editId);
+        const d = await FS.editKelas({ id:editId, namaKelas:form.namaKelas, tingkat:form.tingkat, password:form.password.trim(), isDefault:kelasTarget?.isDefault });
+        if (d.status !== "success") return addToast(d.message || "Gagal menyimpan", "error");
+        addToast("Kelas berhasil diperbarui! ✅", "success");
+      } else {
+        const d = await FS.tambahKelas({ namaKelas:form.namaKelas.trim(), tingkat:form.tingkat, password:form.password.trim() });
+        if (d.status !== "success") return addToast(d.message || "Gagal menyimpan", "error");
+        addToast("Kelas berhasil ditambahkan! ✅", "success");
+      }
+      await fetchKelas(); // reload dari Firestore
+      resetForm();
+    } catch(e) { addToast("Gagal: " + e.message, "error"); }
+    finally { setSaving(false); }
   };
 
   const handleEdit = (k) => {
@@ -3025,10 +3142,15 @@ function AdminPanel({ addToast, onLogout }) {
     setEditId(k.id); setShowForm(true);
   };
 
-  const handleHapus = (id) => {
+  const handleHapus = async (id) => {
     if (kelasList.find(k=>k.id===id)?.isDefault) return addToast("Kelas 6 default tidak bisa dihapus!", "error");
-    saveList(kelasList.filter(k=>k.id!==id));
-    addToast("Kelas dihapus.", "success"); setDelConfirm(null);
+    setSaving(true);
+    try {
+      const d = await FS.hapusKelas({ id });
+      if (d.status === "success") { addToast("Kelas dihapus.", "success"); await fetchKelas(); }
+      else addToast(d.message || "Gagal hapus", "error");
+    } catch(e) { addToast("Gagal: " + e.message, "error"); }
+    finally { setSaving(false); setDelConfirm(null); }
   };
 
   const handleGantiPwd = () => {
@@ -3137,44 +3259,48 @@ function AdminPanel({ addToast, onLogout }) {
                   <p style={{ color:"rgba(255,255,255,0.6)" }}>Guru ketik password ini di halaman login → masuk Panel Guru dengan database baru (kosong, terpisah dari kelas lain).</p>
                 </div>
                 <div className="flex gap-3">
-                  <button onClick={handleSimpan} className="flex-1 text-white font-bold py-2.5 text-sm" style={{ background:"#d97706", borderRadius:"0" }}>
-                    💾 {editId?"Perbarui":"Simpan"} Kelas
+                  <button onClick={handleSimpan} disabled={saving} className="flex-1 text-white font-bold py-2.5 text-sm" style={{ background: saving?"#92400e":"#d97706", borderRadius:"0" }}>
+                    {saving ? "⏳ Menyimpan..." : `💾 ${editId?"Perbarui":"Simpan"} Kelas`}
                   </button>
-                  <button onClick={resetForm} className="px-4 font-bold py-2.5 text-sm" style={{ background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.7)", borderRadius:"0" }}>Batal</button>
+                  <button onClick={resetForm} disabled={saving} className="px-4 font-bold py-2.5 text-sm" style={{ background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.7)", borderRadius:"0" }}>Batal</button>
                 </div>
               </div>
             )}
 
-            <div className="space-y-2">
-              {kelasList.map(k => (
-                <div key={k.id} className="p-4 flex items-center gap-4"
-                  style={{ background:"rgba(255,255,255,0.05)", border:`1px solid ${k.isDefault?"rgba(22,163,74,0.4)":"rgba(255,255,255,0.1)"}`, borderLeft:`4px solid ${k.isDefault?"#16a34a":"#d97706"}`, borderRadius:"0" }}>
-                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-black text-lg flex-shrink-0"
-                    style={{ background:k.isDefault?"#16a34a":"#d97706" }}>
-                    {k.tingkat||k.namaKelas.charAt(0)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-black text-white">{k.namaKelas}</p>
-                      {k.isDefault && <span className="text-xs font-bold px-2 py-0.5" style={{ background:"rgba(22,163,74,0.2)", color:"#86efac", border:"1px solid rgba(22,163,74,0.4)", borderRadius:"0" }}>DEFAULT</span>}
+            {loadingKelas ? (
+              <div className="text-center py-8" style={{ color:"rgba(255,255,255,0.4)" }}>⏳ Memuat data kelas dari Firestore...</div>
+            ) : (
+              <div className="space-y-2">
+                {kelasList.map(k => (
+                  <div key={k.id} className="p-4 flex items-center gap-4"
+                    style={{ background:"rgba(255,255,255,0.05)", border:`1px solid ${k.isDefault?"rgba(22,163,74,0.4)":"rgba(255,255,255,0.1)"}`, borderLeft:`4px solid ${k.isDefault?"#16a34a":"#d97706"}`, borderRadius:"0" }}>
+                    <div className="w-11 h-11 rounded-full flex items-center justify-center text-white font-black text-lg flex-shrink-0"
+                      style={{ background:k.isDefault?"#16a34a":"#d97706" }}>
+                      {k.tingkat||k.namaKelas.charAt(0)}
                     </div>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-xs" style={{ color:"rgba(255,255,255,0.4)" }}>Password guru:</span>
-                      <code className="text-xs px-1" style={{ background:"rgba(0,0,0,0.3)", color:showPwd[k.id]?"#fbbf24":"rgba(255,255,255,0.4)" }}>
-                        {showPwd[k.id]?k.password:"••••••••"}
-                      </code>
-                      <button type="button" onClick={()=>setShowPwd(p=>({...p,[k.id]:!p[k.id]}))} className="text-xs opacity-50 hover:opacity-100 ml-0.5">
-                        {showPwd[k.id]?"🙈":"👁"}
-                      </button>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-black text-white">{k.namaKelas}</p>
+                        {k.isDefault && <span className="text-xs font-bold px-2 py-0.5" style={{ background:"rgba(22,163,74,0.2)", color:"#86efac", border:"1px solid rgba(22,163,74,0.4)", borderRadius:"0" }}>DEFAULT</span>}
+                      </div>
+                      <div className="flex items-center gap-1 mt-1">
+                        <span className="text-xs" style={{ color:"rgba(255,255,255,0.4)" }}>Password guru:</span>
+                        <code className="text-xs px-1" style={{ background:"rgba(0,0,0,0.3)", color:showPwd[k.id]?"#fbbf24":"rgba(255,255,255,0.4)" }}>
+                          {showPwd[k.id]?k.password:"••••••••"}
+                        </code>
+                        <button type="button" onClick={()=>setShowPwd(p=>({...p,[k.id]:!p[k.id]}))} className="text-xs opacity-50 hover:opacity-100 ml-0.5">
+                          {showPwd[k.id]?"🙈":"👁"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button onClick={()=>handleEdit(k)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(255,255,255,0.1)", color:"#93c5fd", borderRadius:"0" }}>✏️</button>
+                      {!k.isDefault && <button onClick={()=>setDelConfirm(k.id)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(204,0,0,0.2)", color:"#fca5a5", borderRadius:"0" }}>🗑️</button>}
                     </div>
                   </div>
-                  <div className="flex gap-1 flex-shrink-0">
-                    <button onClick={()=>handleEdit(k)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(255,255,255,0.1)", color:"#93c5fd", borderRadius:"0" }}>✏️</button>
-                    {!k.isDefault && <button onClick={()=>setDelConfirm(k.id)} className="text-xs font-bold px-2 py-1.5" style={{ background:"rgba(204,0,0,0.2)", color:"#fca5a5", borderRadius:"0" }}>🗑️</button>}
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -3213,8 +3339,10 @@ function AdminPanel({ addToast, onLogout }) {
             <p className="font-bold text-slate-800 mb-1">Hapus Kelas?</p>
             <p className="text-sm text-slate-500 mb-4">Guru tidak bisa login ke kelas ini lagi. Data soal & siswa di Firestore tidak ikut terhapus.</p>
             <div className="flex gap-3">
-              <button onClick={()=>handleHapus(delConfirm)} className="flex-1 text-white font-bold py-2 text-sm" style={{ background:"#CC0000", borderRadius:"0" }}>Ya, Hapus</button>
-              <button onClick={()=>setDelConfirm(null)} className="flex-1 font-bold py-2 text-sm" style={{ background:"#e2e8f0", color:"#475569", borderRadius:"0" }}>Batal</button>
+              <button onClick={()=>handleHapus(delConfirm)} disabled={saving} className="flex-1 text-white font-bold py-2 text-sm" style={{ background: saving?"#7f1d1d":"#CC0000", borderRadius:"0" }}>
+                {saving ? "⏳ Menghapus..." : "Ya, Hapus"}
+              </button>
+              <button onClick={()=>setDelConfirm(null)} disabled={saving} className="flex-1 font-bold py-2 text-sm" style={{ background:"#e2e8f0", color:"#475569", borderRadius:"0" }}>Batal</button>
             </div>
           </div>
         </div>
@@ -3342,19 +3470,42 @@ function HalamanSiswa({ onMulaiUjian, onGuruMode, onAdminMode, mapelList = DEFAU
     lookupTimer.current = setTimeout(async () => {
       setLookupStatus("loading");
       try {
-        const kelasList = loadKelasList();
-        for (const kelas of kelasList) {
-          const ns = kelas.namespace ?? "";
-          const data = await FS.getSiswaByNISN({ nisn: val.trim() }, ns);
-          if (data.status === "success" && data.data) {
-            setNamaLookup(data.data.nama || "");
-            setKelasLookup(data.data.kelas || "");
-            setNsFound(ns);
-            setLookupStatus("found");
-            return;
+        // Ambil daftar kelas langsung dari Firestore (paling akurat)
+        // Fallback ke cache jika Firestore gagal
+        let kelasList = [];
+        try {
+          const res = await FS.getKelasList();
+          if (res.status === "success" && res.data?.length > 0) {
+            kelasList = res.data;
+            saveKelasListCache(kelasList); // update cache
           }
+        } catch {}
+        // Fallback ke cache jika Firestore gagal
+        if (kelasList.length === 0) kelasList = loadKelasListCache();
+
+        // Cari NISN di semua kelas secara paralel (lebih cepat)
+        const hasil = await Promise.all(
+          kelasList.map(async (kelas) => {
+            const ns = kelas.namespace ?? "";
+            try {
+              const data = await FS.getSiswaByNISN({ nisn: val.trim() }, ns);
+              if (data.status === "success" && data.data) {
+                return { found: true, nama: data.data.nama || "", kelas: data.data.kelas || "", ns };
+              }
+            } catch {}
+            return { found: false };
+          })
+        );
+
+        const ketemu = hasil.find(h => h.found);
+        if (ketemu) {
+          setNamaLookup(ketemu.nama);
+          setKelasLookup(ketemu.kelas);
+          setNsFound(ketemu.ns);
+          setLookupStatus("found");
+        } else {
+          setLookupStatus("notfound");
         }
-        setLookupStatus("notfound");
       } catch {
         setLookupStatus("notfound");
       }
@@ -4194,6 +4345,16 @@ export default function App() {
   }, []);
   
   const [kelasAktif, setKelasAktif] = useState(null);
+
+  // Sync daftar kelas dari Firestore ke localStorage saat App pertama load
+  // Agar cariKelasByPassword selalu pakai data terbaru
+  useEffect(() => {
+    FS.getKelasList().then(res => {
+      if (res.status === "success" && res.data?.length > 0) {
+        saveKelasListCache(res.data);
+      }
+    }).catch(() => {});
+  }, []);
 
   const saveSettings = s => { setSettings(s); try { localStorage.setItem("appSettings", JSON.stringify(s)); } catch {} };
   const handleMulaiUjian = async (data) => { setSiswa(data); setMode("ujian"); try { const el = document.documentElement; if (el.requestFullscreen) await el.requestFullscreen(); else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen(); } catch {} };
