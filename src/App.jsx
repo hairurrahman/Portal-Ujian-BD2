@@ -596,11 +596,13 @@ async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah }) 
   // Tabel uraian (jika ada)
   const adaEsai2 = h.adaEsai==="TRUE"||h.adaEsai===true||(h.jawabanEsai&&h.jawabanEsai!==""&&h.jawabanEsai!=="[]");
   if (adaEsai2) {
-    checkY(14);
+    checkY(20);
+    y+=4; // jarak atas sebelum header
     doc.setTextColor(30,30,30);
-    doc.setFillColor(241,245,249); doc.rect(margin,y-5,colW,7,"F");
+    doc.setFillColor(241,245,249); doc.rect(margin,y-5,colW,8,"F");
     doc.setFont("helvetica","bold"); doc.setFontSize(10);
-    doc.text("HASIL URAIAN/ESAI", margin+2, y); y+=4;
+    doc.text("HASIL URAIAN/ESAI", margin+2, y);
+    y+=8; // jarak bawah setelah header
 
     let jawabanEsaiList = [];
     try { jawabanEsaiList = JSON.parse(h.jawabanEsai||"[]"); } catch {}
@@ -609,14 +611,15 @@ async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah }) 
 
     if (jawabanEsaiList.length > 0) {
       jawabanEsaiList.forEach((je, idx) => {
-        checkY(20);
-        // Nomor soal
-        doc.setFillColor(30,58,138); doc.rect(margin,y-5,colW,7,"F");
+        checkY(30);
+        y+=2; // jarak antar soal
+        // Header soal uraian
+        doc.setFillColor(30,58,138); doc.rect(margin,y-5,colW,8,"F");
         doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(9);
         const skorSoal = detailSkor[idx]!==undefined ? `Skor: ${detailSkor[idx]}/10 (=${Math.round(Number(detailSkor[idx])*10)})` : "Belum dikoreksi";
         doc.text(`Soal Uraian ${idx+1}`, margin+3, y);
         doc.text(skorSoal, W-margin-3, y, { align:"right" });
-        y+=8;
+        y+=10; // jarak setelah header soal
         // Soal (strip HTML tags)
         const soalTxt = String(je.soal||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
         doc.setTextColor(30,30,30); doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
@@ -3022,18 +3025,15 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings
                   <td className="px-3 py-2.5 text-center">{!adaEsai ? <span className="text-slate-300">—</span> : sudahKoreksi ? <span className="font-bold text-green-600">{h.skorEsai}</span> : <span className="font-bold" style={{ color: "#b45309" }}>Belum</span>}</td>
                   <td className="px-3 py-2.5 text-center"><span className="font-black text-sm" style={{ color: nilaiAkhir>=86 ? "#15803d" : nilaiAkhir>=66 ? "#003082" : nilaiAkhir>=41 ? "#b45309" : "#CC0000" }}>{nilaiAkhir}</span></td>
                   <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 text-xs font-bold" style={ketStyle}>{keterangan}</span></td>
-                  <td className="px-3 py-2.5 text-center">
-                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
-                      {/* Download PDF — selalu tersedia, fleksibel */}
+                  <td className="px-2 py-2 text-center" style={{ whiteSpace:"nowrap" }}>
+                    <div className="flex items-center justify-center gap-1" style={{ flexWrap:"nowrap" }}>
                       <button
                         onClick={async () => { try { await unduhPDFGabungan({ h, namaGuru: settings.namaGuru||"", nipGuru: settings.nipGuru||"", kotaTTD: settings.kotaTTD||"", namaSekolah: settings.namaSekolah||"" }); } catch(e) { addToast("Gagal download PDF: "+e.message, "error"); } }}
                         className="text-xs font-bold px-2 py-1"
                         style={{ background:"#eff6ff", color:"#003082", borderRadius:"0", border:"1px solid #93c5fd" }}
-                        title="Download PDF Hasil">
-                        📥
-                      </button>
-                      {adaEsai && <button onClick={() => { setModalKoreksi(h); setSkorPerSoal({}); }} className="text-xs font-bold px-2 py-1" style={{ background: sudahKoreksi ? "#f0fdf4" : "#fff7ed", color: sudahKoreksi ? "#15803d" : "#b45309", borderRadius: "0", border: `1px solid ${sudahKoreksi ? "#86efac" : "#fcd34d"}` }}>{sudahKoreksi ? "✏️" : "📝"}</button>}
-                      <button onClick={() => setKonfirmHapus(h)} className="text-xs font-bold px-2 py-1" style={{ background: "#fef2f2", color: "#CC0000", borderRadius: "0", border: "1px solid #fca5a5" }} title="Hapus data ini">🗑</button>
+                        title="Download PDF">📥</button>
+                      {adaEsai && <button onClick={() => { setModalKoreksi(h); setSkorPerSoal({}); }} className="text-xs font-bold px-2 py-1" style={{ background: sudahKoreksi?"#f0fdf4":"#fff7ed", color: sudahKoreksi?"#15803d":"#b45309", borderRadius:"0", border:`1px solid ${sudahKoreksi?"#86efac":"#fcd34d"}` }} title={sudahKoreksi?"Edit Koreksi":"Koreksi Esai"}>{sudahKoreksi?"✏️":"📝"}</button>}
+                      <button onClick={() => setKonfirmHapus(h)} className="text-xs font-bold px-2 py-1" style={{ background:"#fef2f2", color:"#CC0000", borderRadius:"0", border:"1px solid #fca5a5" }} title="Hapus">🗑</button>
                     </div>
                   </td>
                 </tr>
