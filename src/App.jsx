@@ -421,98 +421,6 @@ async function unduhPDF({ siswa, hasilAkhir, soalList, jawabanSiswa, namaGuru, n
   doc.text(String(hasilAkhir.didapatPoint), colX.dapat+cols.dapat/2, y, { align:"center" });
   doc.text(String(hasilAkhir.totalPoint), colX.maks+cols.maks/2, y, { align:"center" });
   y += 10;
-  const soalSalah = soalList.filter((s, idx) => { const d = hasilAkhir.detail[idx]; return d && d.dapat < d.max; });
-  if (soalSalah.length > 0) {
-    checkY(16);
-    doc.setFillColor(254,243,199); doc.rect(margin, y-5, colW, 8, "F");
-    doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(146,64,14);
-    doc.text(`REVIEW SOAL YANG PERLU DIPELAJARI ULANG (${soalSalah.length} soal)`, margin+2, y);
-    doc.setFontSize(7.5); doc.setFont("helvetica","italic"); doc.setTextColor(120,80,20);
-    doc.text("Opsi yang kamu jawab salah diberi tanda [X]. Opsi yang kamu jawab benar diberi tanda [v].", margin+2, y+5.5);
-    y += 11;
-    soalSalah.forEach((s) => {
-      const idxAsli = soalList.findIndex(x => x.id === s.id);
-      const d = hasilAkhir.detail[idxAsli];
-      const opsiArr = JSON.parse(s.opsi || "[]");
-      const benarArr = JSON.parse(s.jawabanBenar || "[]");
-      const jwbSiswa = jawabanSiswa[s.id] || [];
-      checkY(22);
-      doc.setFillColor(241,245,249); doc.rect(margin, y-5, colW, 7, "F");
-      doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(30,30,30);
-      doc.text(`Soal ${idxAsli+1}   [${s.jenisSoal}]   Poin kamu: ${d.dapat} / ${d.max}`, margin+2, y);
-      y += 5.5;
-      doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(40,40,40);
-      const soalLines = doc.splitTextToSize(s.soal, colW - 4);
-      soalLines.forEach(l => { checkY(5); doc.text(l, margin+3, y); y += 4.8; });
-      y += 2;
-      if (s.jenisSoal === "Pilihan Ganda") {
-        opsiArr.forEach((opsi, oi) => {
-          checkY(7);
-          const dipilihSiswa = jwbSiswa[0] === opsi;
-          if (dipilihSiswa) {
-            doc.setFillColor(254,226,226);
-            const oH = doc.splitTextToSize(`${String.fromCharCode(65+oi)}. ${opsi}`, colW-14).length * 5 + 3;
-            doc.rect(margin+2, y-4, colW-4, oH, "F");
-            doc.setTextColor(185,28,28); doc.setFont("helvetica","bold"); doc.text("[X]", margin+4, y);
-          } else {
-            doc.setTextColor(100,100,100); doc.setFont("helvetica","normal"); doc.text("[ ]", margin+4, y);
-          }
-          doc.setFont("helvetica", dipilihSiswa ? "bold" : "normal");
-          doc.setTextColor(dipilihSiswa ? 185 : 60, dipilihSiswa ? 28 : 60, dipilihSiswa ? 28 : 60);
-          const labelH = wrappedText(`${String.fromCharCode(65+oi)}. ${opsi}`, margin+12, y, colW-16, 5);
-          y += Math.max(labelH, 5) + 1;
-        });
-        checkY(6);
-        doc.setTextColor(146,64,14); doc.setFont("helvetica","italic"); doc.setFontSize(7.5);
-        doc.text("* Opsi bertanda [X] adalah jawaban kamu yang tidak tepat. Pelajari kembali materi ini.", margin+3, y);
-        y += 5;
-      } else if (s.jenisSoal === "Pilihan Ganda Kompleks") {
-        opsiArr.forEach((opsi, oi) => {
-          checkY(7);
-          const dipilihSiswa = jwbSiswa.includes(opsi);
-          const harusBenar = benarArr.includes(opsi);
-          let simbol, bgColor, textColor, fontStyle;
-          if (dipilihSiswa && harusBenar) { simbol = "[v]"; bgColor = [220,252,231]; textColor = [21,128,61]; fontStyle = "normal"; }
-          else if (dipilihSiswa && !harusBenar) { simbol = "[X]"; bgColor = [254,226,226]; textColor = [185,28,28]; fontStyle = "bold"; }
-          else if (!dipilihSiswa && harusBenar) { simbol = "[!]"; bgColor = [255,237,213]; textColor = [154,52,18]; fontStyle = "bold"; }
-          else { simbol = "[ ]"; bgColor = null; textColor = [100,100,100]; fontStyle = "normal"; }
-          if (bgColor) { const oH = doc.splitTextToSize(`${String.fromCharCode(65+oi)}. ${opsi}`, colW-14).length * 5 + 3; doc.setFillColor(...bgColor); doc.rect(margin+2, y-4, colW-4, oH, "F"); }
-          doc.setTextColor(...textColor); doc.setFont("helvetica", fontStyle); doc.setFontSize(8.5);
-          doc.text(simbol, margin+4, y);
-          const lH = wrappedText(`${String.fromCharCode(65+oi)}. ${opsi}`, margin+12, y, colW-16, 5);
-          y += Math.max(lH, 5) + 1;
-        });
-        checkY(6);
-        doc.setTextColor(146,64,14); doc.setFont("helvetica","italic"); doc.setFontSize(7.5);
-        doc.text("* [X]=salah pilih  [!]=seharusnya dipilih tapi terlewat  [v]=tepat  [ ]=tidak dipilih", margin+3, y);
-        y += 5;
-      } else {
-        opsiArr.forEach((opsi, oi) => {
-          checkY(8);
-          const jwbSiswaItem = jwbSiswa[oi] || null;
-          const jwbBenar = benarArr[oi];
-          const tepat = jwbSiswaItem === jwbBenar;
-          if (!tepat) { doc.setFillColor(254,226,226); const oH = doc.splitTextToSize(`${oi+1}. ${opsi}`, colW-30).length * 5 + 3; doc.rect(margin+2, y-4, colW-4, oH, "F"); }
-          doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(40,40,40);
-          const pH = wrappedText(`${oi+1}. ${opsi}`, margin+4, y, colW-30, 5);
-          const jwbLabel = jwbSiswaItem || "(tidak dijawab)";
-          const statusLabel = tepat ? "[v]" : "[X]";
-          doc.setFont("helvetica","bold"); doc.setTextColor(tepat ? 21 : 185, tepat ? 128 : 28, tepat ? 61 : 28);
-          doc.text(`${statusLabel} ${jwbLabel}`, W - margin - 2, y, { align:"right" });
-          doc.setFont("helvetica","normal");
-          y += Math.max(pH, 6) + 1;
-        });
-        checkY(6);
-        doc.setTextColor(146,64,14); doc.setFont("helvetica","italic"); doc.setFontSize(7.5);
-        doc.text("* [X] = jawaban kamu tidak tepat, [v] = tepat", margin+3, y);
-        y += 5;
-      }
-      checkY(5);
-      doc.setDrawColor(200,200,200); doc.setLineWidth(0.2);
-      doc.line(margin, y, W-margin, y);
-      y += 6;
-    });
-  }
   checkY(40);
   doc.setTextColor(30,30,30);
   const ttdX = W - margin - 50;
@@ -531,10 +439,245 @@ async function unduhPDF({ siswa, hasilAkhir, soalList, jawabanSiswa, namaGuru, n
   checkY(8);
   doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor(150,150,150);
   doc.text("Dokumen ini digenerate otomatis oleh Aplikasi Web Asesmen", W/2, 290, { align:"center" });
-  const mapelKode = siswa.mapel.replace(/\s+/g,"_");
-  const asesmenKode = siswa.asesmen.replace(/\s+/g,"_");
-  const tanggalKode = new Date().toISOString().slice(0,10);
-  doc.save(`Laporan_${mapelKode}_${asesmenKode}_${tanggalKode}.pdf`);
+  const sanitize = (s) => String(s).replace(/[^a-zA-Z0-9À-ÿ]/g, "_").replace(/_+/g,"_").replace(/^_|_$/g,"");
+  const mapelKode = sanitize(siswa.mapel);
+  const asesmenKode = sanitize(siswa.asesmen);
+  const namaKode = sanitize(siswa.nama);
+  doc.save(`${mapelKode}_${asesmenKode}_${namaKode}.pdf`);
+}
+
+// PDF gabungan untuk guru (dari rekap hasil) — objektif + uraian
+async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah }) {
+  if (!window.jspdf) {
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const tgl = new Date().toLocaleDateString("id-ID", { day:"numeric", month:"long", year:"numeric" });
+  const W = 210, margin = 18, colW = W - margin * 2;
+  let y = margin;
+  const checkY = (need = 10) => { if (y + need > 280) { doc.addPage(); y = margin; } };
+  const wrappedText = (text, x, yy, maxW, lineH = 5) => {
+    const lines = doc.splitTextToSize(String(text), maxW);
+    lines.forEach((l, i) => doc.text(l, x, yy + i * lineH));
+    return lines.length * lineH;
+  };
+
+  // Header
+  doc.setFillColor(30,58,138); doc.rect(0,0,W,28,"F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(14);
+  doc.text("LAPORAN HASIL ASESMEN", W/2, 11, { align:"center" });
+  doc.setFontSize(10); doc.setFont("helvetica","normal");
+  doc.text(namaSekolah || "Portal Ujian Digital", W/2, 18, { align:"center" });
+  doc.setFontSize(8);
+  doc.text("Aplikasi Web Asesmen — Copyright © 2026 Hairur Rahman", W/2, 24, { align:"center" });
+  y = 36;
+
+  // Data siswa
+  doc.setTextColor(30,30,30);
+  doc.setFillColor(241,245,249); doc.rect(margin, y-5, colW, 7, "F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(10);
+  doc.text("DATA SISWA", margin+2, y); y += 6;
+  const rows = [["Nama",h.nama],["NISN",h.nisn],["Kelas/No.Absen",h.noAbsen||"-"],["Mata Pelajaran",h.mapel],["Jenis Asesmen",h.asesmen],["Waktu Ujian",h.waktu||"-"],["Tanggal Cetak",tgl]];
+  doc.setFontSize(9.5);
+  rows.forEach(([k,v]) => { checkY(7); doc.setFont("helvetica","bold"); doc.text(k,margin+2,y); doc.setFont("helvetica","normal"); doc.text(`: ${v}`,margin+44,y); y+=6; });
+  y+=4;
+
+  // Kotak nilai akhir
+  const nilaiAkhir = (() => {
+    const obj = Number(h.skorObjektif||0);
+    const esai = (h.skorEsai!==undefined && h.skorEsai!=="") ? Number(h.skorEsai) : null;
+    const adaEsai = h.adaEsai==="TRUE"||h.adaEsai===true||(h.jawabanEsai&&h.jawabanEsai!==""&&h.jawabanEsai!=="[]");
+    if (!adaEsai||esai===null) return obj;
+    // Ambil bobot dari nilaiAkhir jika sudah tersimpan, atau hitung dari bobot default 80/20
+    if (h.nilaiAkhir!==undefined && h.nilaiAkhir!=="") return Number(h.nilaiAkhir);
+    return Math.round(obj*0.8 + esai*0.2);
+  })();
+  const predikat = nilaiAkhir>=86?"Mahir":nilaiAkhir>=66?"Cakap":nilaiAkhir>=41?"Berkembang":"Perlu Bimbingan";
+  const nilaiRGB = nilaiAkhir>=75?[22,163,74]:nilaiAkhir>=50?[217,119,6]:[220,38,38];
+  checkY(32);
+  doc.setDrawColor(...nilaiRGB); doc.setLineWidth(0.8);
+  doc.roundedRect(margin,y,colW,28,3,3,"D");
+  doc.setTextColor(...nilaiRGB);
+  doc.setFont("helvetica","bold"); doc.setFontSize(30);
+  doc.text(String(nilaiAkhir), W/2, y+14, { align:"center" });
+  doc.setFontSize(10); doc.text(predikat, W/2, y+21, { align:"center" });
+  doc.setTextColor(100,100,100); doc.setFont("helvetica","normal"); doc.setFontSize(8.5);
+  const detailNilai = h.skorEsai!==""&&h.skorEsai!==undefined
+    ? `Obj: ${h.skorObjektif}  |  Esai: ${h.skorEsai}  |  Akhir: ${nilaiAkhir}`
+    : `Skor Objektif: ${h.skorObjektif}`;
+  doc.text(detailNilai, W/2, y+27, { align:"center" });
+  y+=33;
+
+  // Tabel rincian objektif — pakai detailJawaban jika ada
+  checkY(14);
+  doc.setTextColor(30,30,30);
+  doc.setFillColor(241,245,249); doc.rect(margin,y-5,colW,7,"F");
+  doc.setFont("helvetica","bold"); doc.setFontSize(10);
+  doc.text("HASIL OBJEKTIF", margin+2, y); y+=4;
+
+  let detailJawabanObj = {};
+  try { detailJawabanObj = JSON.parse(h.detailJawaban||"{}"); } catch {}
+  const soalObjektif = Object.values(detailJawabanObj).filter(d => d.jenis !== "Uraian/Esai");
+
+  if (soalObjektif.length > 0) {
+    // Render tabel rincian per soal
+    const cols = { no:12, jenis:40, ket:70, dapat:22, maks:22 };
+    const colX = { no:margin, jenis:margin+cols.no, ket:margin+cols.no+cols.jenis, dapat:margin+cols.no+cols.jenis+cols.ket, maks:margin+cols.no+cols.jenis+cols.ket+cols.dapat };
+    doc.setFillColor(30,58,138); doc.rect(margin,y,colW,7,"F");
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+    ["No","Jenis Soal","Keterangan","Dapat","Maks"].forEach((hd,i) => {
+      const xArr = [colX.no+2, colX.jenis+1, colX.ket+1, colX.dapat+1, colX.maks+1];
+      doc.text(hd, xArr[i], y+5);
+    });
+    y+=7;
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5);
+    let totalDapat=0, totalMaks=0;
+    soalObjektif.forEach((d, i) => {
+      checkY(7);
+      const opsiArr = (() => { try { return JSON.parse(d.opsi||"[]"); } catch { return []; } })();
+      const benarArr = (() => { try { return JSON.parse(d.jawabanBenar||"[]"); } catch { return []; } })();
+      const jwbSiswa = Array.isArray(d.jawaban) ? d.jawaban : (d.jawaban ? [d.jawaban] : []);
+      const maks = Number(d.point)||0;
+      let dapat = 0;
+      if (d.jenis === "Pilihan Ganda") {
+        dapat = (benarArr.length>0 && jwbSiswa[0]===benarArr[0]) ? maks : 0;
+      } else if (d.jenis === "Pilihan Ganda Kompleks") {
+        if (benarArr.length>0) { const benar=jwbSiswa.filter(j=>benarArr.includes(j)).length; const salah=jwbSiswa.filter(j=>!benarArr.includes(j)).length; dapat=salah>0?0:Math.round((benar/benarArr.length)*maks); }
+      } else if (d.jenis === "Benar/Salah Kompleks") {
+        if (benarArr.length>0) { const benar=jwbSiswa.filter((j,ii)=>j===benarArr[ii]).length; dapat=benar===benarArr.length?maks:benar>0?Math.round((benar/benarArr.length)*maks):0; }
+      }
+      totalDapat+=dapat; totalMaks+=maks;
+      doc.setFillColor(...(i%2===0?[255,255,255]:[248,250,252]));
+      doc.rect(margin,y-4.5,colW,6.5,"F");
+      doc.setTextColor(30,30,30);
+      doc.text(String(i+1), colX.no+4, y, { align:"center" });
+      doc.text(d.jenis||"-", colX.jenis+1, y);
+      const ket = dapat>=maks ? "Benar" : dapat>0 ? "Sebagian Benar" : "Salah";
+      if (dapat<maks) doc.setTextColor(180,30,30); else doc.setTextColor(21,128,61);
+      doc.text(ket, colX.ket+1, y);
+      doc.setTextColor(30,30,30);
+      if (dapat<maks) doc.setTextColor(180,30,30);
+      doc.text(String(dapat), colX.dapat+cols.dapat/2, y, { align:"center" });
+      doc.setTextColor(30,30,30);
+      doc.text(String(maks), colX.maks+cols.maks/2, y, { align:"center" });
+      y+=6.5;
+    });
+    // Total row
+    checkY(8);
+    doc.setFillColor(226,232,240); doc.rect(margin,y-4.5,colW,7,"F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5); doc.setTextColor(30,30,30);
+    doc.text("TOTAL POIN", colX.ket+1, y);
+    doc.text(String(totalDapat), colX.dapat+cols.dapat/2, y, { align:"center" });
+    doc.text(String(totalMaks), colX.maks+cols.maks/2, y, { align:"center" });
+    y+=8;
+    // Skor objektif (sudah dikonversi ke 100)
+    checkY(8);
+    doc.setFillColor(30,58,138); doc.rect(margin,y-4,colW,7,"F");
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(9);
+    doc.text("SKOR OBJEKTIF (skala 100):", margin+3, y);
+    doc.text(String(h.skorObjektif??"-"), W-margin-3, y, { align:"right" });
+    y+=10;
+  } else {
+    // Fallback: hanya tampilkan skor total
+    doc.setFillColor(30,58,138); doc.rect(margin,y,colW,7,"F");
+    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+    doc.text("Skor Objektif", margin+4, y+5);
+    doc.text(String(h.skorObjektif??"-"), W/2, y+5, { align:"center" });
+    y+=12;
+  }
+
+  // Tabel uraian (jika ada)
+  const adaEsai2 = h.adaEsai==="TRUE"||h.adaEsai===true||(h.jawabanEsai&&h.jawabanEsai!==""&&h.jawabanEsai!=="[]");
+  if (adaEsai2) {
+    checkY(14);
+    doc.setTextColor(30,30,30);
+    doc.setFillColor(241,245,249); doc.rect(margin,y-5,colW,7,"F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(10);
+    doc.text("HASIL URAIAN/ESAI", margin+2, y); y+=4;
+
+    let jawabanEsaiList = [];
+    try { jawabanEsaiList = JSON.parse(h.jawabanEsai||"[]"); } catch {}
+    let detailSkor = {};
+    try { detailSkor = JSON.parse(h.detailSkorEsai||"{}"); } catch {}
+
+    if (jawabanEsaiList.length > 0) {
+      jawabanEsaiList.forEach((je, idx) => {
+        checkY(20);
+        // Nomor soal
+        doc.setFillColor(30,58,138); doc.rect(margin,y-5,colW,7,"F");
+        doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(9);
+        const skorSoal = detailSkor[idx]!==undefined ? `Skor: ${detailSkor[idx]}/10 (=${Math.round(Number(detailSkor[idx])*10)})` : "Belum dikoreksi";
+        doc.text(`Soal Uraian ${idx+1}`, margin+3, y);
+        doc.text(skorSoal, W-margin-3, y, { align:"right" });
+        y+=8;
+        // Soal (strip HTML tags)
+        const soalTxt = String(je.soal||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+        doc.setTextColor(30,30,30); doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+        doc.text("Pertanyaan:", margin+2, y); y+=5;
+        doc.setFont("helvetica","normal");
+        const soalLines = doc.splitTextToSize(soalTxt||"-", colW-4);
+        soalLines.forEach(l => { checkY(5); doc.text(l,margin+3,y); y+=5; });
+        // Kunci jawaban
+        if (je.referensi) {
+          checkY(8);
+          const refTxt = String(je.referensi).replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
+          doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(21,128,61);
+          doc.text("Kunci:", margin+2, y); y+=5;
+          doc.setFont("helvetica","italic");
+          const refLines = doc.splitTextToSize(refTxt, colW-4);
+          refLines.forEach(l => { checkY(5); doc.text(l,margin+3,y); y+=5; });
+        }
+        // Jawaban siswa
+        checkY(8);
+        doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(146,64,14);
+        doc.text("Jawaban Siswa:", margin+2, y); y+=5;
+        doc.setFont("helvetica","normal"); doc.setTextColor(40,40,40);
+        const jwbLines = doc.splitTextToSize(je.jawaban||"(tidak dijawab)", colW-4);
+        jwbLines.forEach(l => { checkY(5); doc.text(l,margin+3,y); y+=5; });
+        // Garis pemisah
+        y+=3; checkY(5);
+        doc.setDrawColor(200,200,200); doc.setLineWidth(0.2);
+        doc.line(margin,y,W-margin,y); y+=6;
+      });
+      // Total skor esai
+      checkY(10);
+      doc.setFillColor(226,232,240); doc.rect(margin,y-4,colW,7,"F");
+      doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(30,30,30);
+      doc.text("SKOR ESAI (skala 100):", margin+3, y);
+      doc.text(h.skorEsai!==undefined&&h.skorEsai!==""?String(h.skorEsai):"Belum dikoreksi", W-margin-3, y, { align:"right" });
+      y+=10;
+    } else {
+      doc.setFont("helvetica","italic"); doc.setFontSize(9); doc.setTextColor(150,150,150);
+      doc.text("Tidak ada jawaban uraian.", margin+3, y); y+=10;
+    }
+  }
+
+  // TTD
+  checkY(40);
+  doc.setTextColor(30,30,30);
+  const ttdX = W-margin-50;
+  doc.setFont("helvetica","normal"); doc.setFontSize(9);
+  const kotaLabel = kotaTTD ? `${kotaTTD}, ${tgl}` : tgl;
+  doc.text(kotaLabel, ttdX, y, { align:"center" }); y+=5;
+  doc.text(`Guru ${h.mapel}`, ttdX, y, { align:"center" }); y+=22;
+  doc.setDrawColor(30,30,30); doc.setLineWidth(0.4);
+  doc.line(ttdX-28, y, ttdX+28, y); y+=5;
+  doc.setFont("helvetica","bold"); doc.setFontSize(9);
+  doc.text(namaGuru||"________________________", ttdX, y, { align:"center" });
+  if (nipGuru) { y+=5; doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.text(`NIP. ${nipGuru}`, ttdX, y, { align:"center" }); }
+  doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor(150,150,150);
+  doc.text("Dokumen ini digenerate otomatis oleh Aplikasi Web Asesmen", W/2, 290, { align:"center" });
+
+  // Nama file
+  const sanitize = (s) => String(s).replace(/[^a-zA-Z0-9À-ÿ]/g,"_").replace(/_+/g,"_").replace(/^_|_$/g,"");
+  doc.save(`${sanitize(h.mapel)}_${sanitize(h.asesmen)}_${sanitize(h.nama)}.pdf`);
 }
 
 const toastColors = { success:"#15803d", error:"#CC0000", warning:"#b45309", info:"#003082" };
@@ -2680,7 +2823,7 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   );
 }
 
-function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
+function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings={} }) {
   mapelList = mapelList || DEFAULT_MAPEL;
   asesmenList = asesmenList || DEFAULT_ASESMEN;
   const [hasil, setHasil] = useState([]);
@@ -2880,7 +3023,15 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
                   <td className="px-3 py-2.5 text-center"><span className="font-black text-sm" style={{ color: nilaiAkhir>=86 ? "#15803d" : nilaiAkhir>=66 ? "#003082" : nilaiAkhir>=41 ? "#b45309" : "#CC0000" }}>{nilaiAkhir}</span></td>
                   <td className="px-3 py-2.5 text-center"><span className="px-2 py-0.5 text-xs font-bold" style={ketStyle}>{keterangan}</span></td>
                   <td className="px-3 py-2.5 text-center">
-                    <div className="flex items-center justify-center gap-1.5">
+                    <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                      {/* Download PDF — selalu tersedia, fleksibel */}
+                      <button
+                        onClick={async () => { try { await unduhPDFGabungan({ h, namaGuru: settings.namaGuru||"", nipGuru: settings.nipGuru||"", kotaTTD: settings.kotaTTD||"", namaSekolah: settings.namaSekolah||"" }); } catch(e) { addToast("Gagal download PDF: "+e.message, "error"); } }}
+                        className="text-xs font-bold px-2 py-1"
+                        style={{ background:"#eff6ff", color:"#003082", borderRadius:"0", border:"1px solid #93c5fd" }}
+                        title="Download PDF Hasil">
+                        📥
+                      </button>
                       {adaEsai && <button onClick={() => { setModalKoreksi(h); setSkorPerSoal({}); }} className="text-xs font-bold px-2 py-1" style={{ background: sudahKoreksi ? "#f0fdf4" : "#fff7ed", color: sudahKoreksi ? "#15803d" : "#b45309", borderRadius: "0", border: `1px solid ${sudahKoreksi ? "#86efac" : "#fcd34d"}` }}>{sudahKoreksi ? "✏️" : "📝"}</button>}
                       <button onClick={() => setKonfirmHapus(h)} className="text-xs font-bold px-2 py-1" style={{ background: "#fef2f2", color: "#CC0000", borderRadius: "0", border: "1px solid #fca5a5" }} title="Hapus data ini">🗑</button>
                     </div>
@@ -4182,11 +4333,15 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
       .map((s) => ({ soal: s.soal, referensi: s.jawabanReferensi || "", jawaban: jawaban[s.id] || "" }));
 
     try {
+      // Simpan detail jawaban per soal agar bisa dipakai untuk PDF guru
+      const detailJawaban = {};
+      soalList.forEach(s => { detailJawaban[s.id] = { jawaban: jawaban[s.id]||[], jenis: s.jenisSoal, soal: s.soal||"", opsi: s.opsi||"[]", jawabanBenar: s.jawabanBenar||"[]", point: s.point||0 }; });
       await FS.simpanHasil({
         nama: siswa.nama, nisn: siswa.nisn, noAbsen: siswa.noAbsen,
         mapel: siswa.mapel, asesmen: siswa.asesmen,
         nilai, adaEsai,
         jawabanEsai: adaEsai ? JSON.stringify(jawabanEsaiList) : "",
+        detailJawaban: JSON.stringify(detailJawaban),
         token: siswa.token,
         waktu: new Date().toLocaleString("id-ID")
       }, nsEfektif);

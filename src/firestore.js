@@ -500,6 +500,7 @@ export async function simpanHasil(p, ns = "") {
       nilaiAkhir: adaEsai ? "" : Number(p.nilai||0),
       token:p.token||"", waktu, adaEsai: adaEsai?"TRUE":"FALSE",
       jawabanEsai:p.jawabanEsai||"", detailSkorEsai:"",
+      detailJawaban:p.detailJawaban||"",
     };
     await fsPatch(`${col(ns, "hasil")}/${docId}`, payload);
     return { status:"success", message:"Hasil berhasil disimpan" };
