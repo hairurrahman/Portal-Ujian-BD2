@@ -1427,7 +1427,6 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
             <div className="text-xs text-slate-400 bg-slate-50 px-3 py-2" style={{ borderLeft: "3px solid #16a34a" }}>
               <strong>Mahir:</strong> {kktp.ck + 1} &ndash; 100 &nbsp;|&nbsp; Pastikan nilai berurutan: Perlu Bimbingan &lt; Berkembang &lt; Cakap.
             </div>
-            )}
           </div>
         )}
         <button onClick={handleSaveKKTP} disabled={kktpSaving} className={btn("green") + " w-full md:w-auto"}>{kktpSaving ? "Menyimpan..." : "💾 Simpan KKTP"}</button>
