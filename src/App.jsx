@@ -2118,6 +2118,9 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   const [jawabanBenar, setJawabanBenar] = useState([]);
   const [jawabanReferensi, setJawabanReferensi] = useState("");
   const [loading, setLoading] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState({ total: 0, done: 0 });
+  const importFileRef = useRef(null);
 
   const handleGantiJenis = j => {
     setJenisSoal(j);
@@ -2203,11 +2206,183 @@ function TabInputSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
 
   const isMath = isMapelMath(mapel);
 
+  // ===== IMPORT SOAL DARI XLSX/CSV =====
+  const ensureXLSX = async () => {
+    if (!window.XLSX) await new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  };
+
+  const handleDownloadTemplateSoal = async () => {
+    try {
+      await ensureXLSX();
+      const header = ["Mata Pelajaran","Jenis Asesmen","Tipe Soal","Pertanyaan","Poin","Opsi A / Pernyataan 1","Opsi B / Pernyataan 2","Opsi C / Pernyataan 3","Opsi D","Kunci Jawaban"];
+      const contoh = [
+        [mapel, asesmen, "Pilihan Ganda", "Ibu kota Indonesia adalah ...", 3, "Jakarta", "Bandung", "Surabaya", "Medan", "A"],
+        [mapel, asesmen, "Pilihan Ganda Kompleks", "Berikut ini yang termasuk bilangan genap adalah ... (boleh lebih dari satu)", 6, "2", "3", "4", "5", "A, C"],
+        [mapel, asesmen, "Benar Salah", "Tentukan Benar/Salah setiap pernyataan berikut!", 6, "Matahari terbit dari timur", "Air mendidih pada suhu 0°C", "Bumi mengelilingi matahari", "", "Benar, Salah, Benar"],
+        [mapel, asesmen, "Uraian", "Jelaskan proses terjadinya hujan!", "", "", "", "", "", "Jawaban ideal/kata kunci (opsional)"],
+      ];
+      const wb = window.XLSX.utils.book_new();
+      const ws = window.XLSX.utils.aoa_to_sheet([header, ...contoh]);
+      ws["!cols"] = [{ wch: 18 },{ wch: 16 },{ wch: 20 },{ wch: 40 },{ wch: 6 },{ wch: 28 },{ wch: 28 },{ wch: 28 },{ wch: 20 },{ wch: 20 }];
+      window.XLSX.utils.book_append_sheet(wb, ws, "Template");
+      window.XLSX.writeFile(wb, "template_import_soal.xlsx");
+      addToast("✅ Template XLSX berhasil diunduh!", "success");
+    } catch (err) { addToast("Gagal membuat template: " + err.message, "error"); }
+  };
+
+  const letterToIdx = (letter) => {
+    const c = String(letter || "").trim().toUpperCase().charCodeAt(0);
+    if (c < 65 || c > 68) return -1; // hanya A-D didukung (4 opsi via template)
+    return c - 65;
+  };
+  const normalizeBS = (s) => {
+    const t = String(s || "").trim().toLowerCase();
+    if (t.startsWith("b")) return "Benar";
+    if (t.startsWith("s")) return "Salah";
+    return "";
+  };
+  const normalizeTipeSoal = (raw) => {
+    const t = String(raw || "").trim().toLowerCase();
+    if (t.includes("kompleks") && t.includes("ganda")) return "Pilihan Ganda Kompleks";
+    if (t.includes("ganda")) return "Pilihan Ganda";
+    if (t.includes("benar") && t.includes("salah")) return "Benar/Salah Kompleks";
+    if (t.includes("uraian") || t.includes("esai")) return "Uraian/Esai";
+    return "";
+  };
+  const defaultPointFor = (jenis) => jenis === "Pilihan Ganda" ? 3 : jenis === "Pilihan Ganda Kompleks" ? 6 : jenis === "Benar/Salah Kompleks" ? 6 : 0;
+
+  const handleFileImportSoal = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true);
+    setImportProgress({ total: 0, done: 0 });
+    addToast("Membaca file...", "info");
+    try {
+      await ensureXLSX();
+      const buffer = await file.arrayBuffer();
+      const workbook = window.XLSX.read(buffer, { type: "array" });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = window.XLSX.utils.sheet_to_json(sheet, { header: 1 });
+      if (rows.length < 2) { addToast("File kosong atau tidak ada data soal.", "error"); setImporting(false); return; }
+
+      const header = rows[0].map(h => String(h || "").toLowerCase().trim());
+      const col = {
+        mapel: header.findIndex(h => h.includes("mata pelajaran") || h === "mapel"),
+        asesmen: header.findIndex(h => h.includes("asesmen")),
+        tipe: header.findIndex(h => h.includes("tipe soal") || h.includes("jenis soal")),
+        pertanyaan: header.findIndex(h => h.includes("pertanyaan")),
+        poin: header.findIndex(h => h.includes("poin") || h.includes("point")),
+        a: header.findIndex(h => h.includes("opsi a")),
+        b: header.findIndex(h => h.includes("opsi b")),
+        c: header.findIndex(h => h.includes("opsi c")),
+        d: header.findIndex(h => h.includes("opsi d")),
+        kunci: header.findIndex(h => h.includes("kunci")),
+      };
+      if (col.tipe < 0 || col.pertanyaan < 0) { addToast("Kolom 'Tipe Soal' atau 'Pertanyaan' tidak ditemukan. Gunakan template resmi.", "error"); setImporting(false); return; }
+
+      const soalList = [];
+      const errorBaris = [];
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.every(v => v === undefined || v === null || String(v).trim() === "")) continue;
+        const get = (idx) => idx >= 0 && row[idx] !== undefined && row[idx] !== null ? String(row[idx]).trim() : "";
+
+        const pertanyaan = get(col.pertanyaan);
+        if (!pertanyaan) continue;
+        const jenisSoalRow = normalizeTipeSoal(get(col.tipe));
+        if (!jenisSoalRow) { errorBaris.push(i + 1); continue; }
+
+        const mapelRow = get(col.mapel) || mapel;
+        const asesmenRow = get(col.asesmen) || asesmen;
+        const rawOpsi = [get(col.a), get(col.b), get(col.c), get(col.d)];
+        const poinRaw = Number(get(col.poin));
+        const poinRow = poinRaw > 0 ? poinRaw : defaultPointFor(jenisSoalRow);
+        const kunciRaw = get(col.kunci);
+
+        let opsiRow = [];
+        let jawabanBenarRow = [];
+        let jawabanReferensiRow = "";
+
+        if (jenisSoalRow === "Uraian/Esai") {
+          opsiRow = [];
+          jawabanReferensiRow = kunciRaw;
+        } else if (jenisSoalRow === "Pilihan Ganda") {
+          opsiRow = rawOpsi.filter(o => o);
+          const idx = letterToIdx(kunciRaw);
+          const benar = idx >= 0 ? rawOpsi[idx] : "";
+          if (opsiRow.length < 2 || !benar) { errorBaris.push(i + 1); continue; }
+          jawabanBenarRow = [benar];
+        } else if (jenisSoalRow === "Pilihan Ganda Kompleks") {
+          opsiRow = rawOpsi.filter(o => o);
+          const letters = kunciRaw.split(/[,/\s]+/).map(s => s.trim()).filter(Boolean);
+          jawabanBenarRow = letters.map(l => { const idx = letterToIdx(l); return idx >= 0 ? rawOpsi[idx] : ""; }).filter(Boolean);
+          if (opsiRow.length < 2 || jawabanBenarRow.length === 0) { errorBaris.push(i + 1); continue; }
+        } else if (jenisSoalRow === "Benar/Salah Kompleks") {
+          const aktif = rawOpsi.filter(o => o);
+          opsiRow = aktif;
+          const parts = kunciRaw.split(",").map(normalizeBS);
+          jawabanBenarRow = aktif.map((_, idx) => parts[idx] || "");
+          if (opsiRow.length < 2 || jawabanBenarRow.some(v => !v)) { errorBaris.push(i + 1); continue; }
+        }
+
+        soalList.push({
+          mapel: mapelRow, asesmen: asesmenRow, soal: pertanyaan, gambar: "",
+          jenisSoal: jenisSoalRow,
+          opsi: JSON.stringify(opsiRow),
+          jawabanBenar: JSON.stringify(jawabanBenarRow),
+          jawabanReferensi: jawabanReferensiRow,
+          point: Number(poinRow),
+        });
+      }
+
+      if (soalList.length === 0) { addToast("Tidak ada baris valid untuk diimpor. Periksa format Tipe Soal & Kunci Jawaban.", "error"); setImporting(false); return; }
+
+      setImportProgress({ total: soalList.length, done: 0 });
+      let sukses = 0, gagal = 0;
+      for (const s of soalList) {
+        try {
+          const d = await FS.tambahSoal(s, ns);
+          if (d.status === "success") { sukses++; FS.updateSoalCounter(1, ns); } else gagal++;
+        } catch { gagal++; }
+        setImportProgress(p => ({ ...p, done: p.done + 1 }));
+      }
+      const infoBaris = errorBaris.length > 0 ? ` (${errorBaris.length} baris dilewati karena format tidak valid: baris ${errorBaris.slice(0,10).join(", ")}${errorBaris.length>10?", ...":""})` : "";
+      addToast(`✅ Import selesai: ${sukses} soal berhasil, ${gagal} gagal.${infoBaris}`, sukses > 0 ? "success" : "error");
+    } catch (err) {
+      addToast("Gagal membaca file: " + err.message, "error");
+    } finally { setImporting(false); }
+  };
+
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-xl font-black uppercase tracking-wide" style={{ color: "#003082" }}>Input Soal</h2>
         <p className="text-sm text-slate-500">Tambahkan soal ke bank soal. Gunakan toolbar untuk format teks dan rumus matematika.</p>
+      </div>
+
+      {/* Import Massal dari XLSX/CSV */}
+      <div className="bg-white p-5 space-y-3" style={{ border: "1px solid #e2e8f0", borderTop: "3px solid #16a34a", borderRadius: "0" }}>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h3 className="font-bold text-sm uppercase tracking-wide" style={{ color: "#15803d" }}>📤 Import Soal Massal</h3>
+            <p className="text-xs text-slate-500">Unggah banyak soal sekaligus dari file Excel/CSV sesuai template.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={handleDownloadTemplateSoal} className="font-bold py-2 px-4 text-sm" style={{ background: "#f1f5f9", color: "#475569", borderRadius: "0", border: "1px solid #cbd5e1" }}>📥 Download Template</button>
+            <button onClick={() => importFileRef.current?.click()} disabled={importing} className="font-bold py-2 px-4 text-sm disabled:opacity-50" style={{ background: "#f0fdf4", color: "#15803d", borderRadius: "0", border: "1px solid #86efac" }}>
+              {importing ? <>⏳ Mengimpor {importProgress.done}/{importProgress.total}...</> : <>📤 Import XLSX/CSV</>}
+            </button>
+            <input ref={importFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFileImportSoal} />
+          </div>
+        </div>
+        <div className="p-3 text-xs space-y-1" style={{ background: "#f0fdf4", border: "1px solid #86efac", borderLeft: "4px solid #16a34a", borderRadius: "0", color: "#15803d" }}>
+          <p className="font-bold mb-1">📋 Cara Import Massal:</p>
+          <p>1. Klik <strong>Download Template</strong> → buka di Excel/Google Sheets</p>
+          <p>2. Isi kolom: Mata Pelajaran, Jenis Asesmen, Tipe Soal (Pilihan Ganda / Pilihan Ganda Kompleks / Benar Salah / Uraian), Pertanyaan, Poin, Opsi A-D, dan Kunci Jawaban</p>
+          <p>3. Kunci Jawaban: PG isi 1 huruf (contoh <strong>A</strong>), PG Kompleks isi beberapa huruf dipisah koma (contoh <strong>A, C</strong>), Benar/Salah isi <strong>Benar/Salah</strong> per pernyataan dipisah koma (contoh <strong>Benar, Salah, Benar</strong>), Uraian boleh dikosongkan atau diisi kunci referensi</p>
+          <p>4. Simpan sebagai <strong>.xlsx</strong> atau <strong>.csv</strong>, lalu klik <strong>Import XLSX/CSV</strong> → pilih file</p>
+        </div>
       </div>
       
       <div className="bg-white p-6 space-y-5" style={{ border: "1px solid #e2e8f0", borderTop: "3px solid #CC0000", borderRadius: "0" }}>
@@ -2354,6 +2529,9 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
   const [expandId, setExpandId] = useState(null);
   const [hapusId, setHapusId] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [hapusSemuaConfirm, setHapusSemuaConfirm] = useState(false);
+  const [deletingSemua, setDeletingSemua] = useState(false);
+  const [progressHapusSemua, setProgressHapusSemua] = useState({ total: 0, done: 0 });
 
   // --- State edit soal ---
   const [editId, setEditId] = useState(null);       // id soal yang sedang diedit
@@ -2394,6 +2572,27 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
       } else addToast(d.message || "Gagal menghapus soal", "error");
     } catch { addToast("Gagal terhubung", "error"); }
     finally { setDeleting(false); }
+  };
+
+  // ---- Hapus semua soal sesuai filter ----
+  const handleHapusSemuaSoal = async () => {
+    if (soalList.length === 0) return;
+    setDeletingSemua(true);
+    setProgressHapusSemua({ total: soalList.length, done: 0 });
+    let sukses = 0, gagal = 0;
+    const idBerhasil = [];
+    for (const s of soalList) {
+      try {
+        const d = await FS.hapusSoal({ id: s.id, mapel: filterMapel, asesmen: filterAsesmen }, ns);
+        if (d.status === "success") { sukses++; idBerhasil.push(s.id); FS.updateSoalCounter(-1, ns); } else gagal++;
+      } catch { gagal++; }
+      setProgressHapusSemua(p => ({ ...p, done: p.done + 1 }));
+    }
+    setSoalList(prev => prev.filter(s => !idBerhasil.includes(s.id)));
+    setHapusSemuaConfirm(false);
+    setDeletingSemua(false);
+    if (expandId && idBerhasil.includes(expandId)) setExpandId(null);
+    addToast(`✅ Hapus selesai: ${sukses} soal berhasil dihapus${gagal > 0 ? `, ${gagal} gagal` : ""}.`, sukses > 0 ? "success" : "error");
   };
 
   // ---- Buka modal edit ----
@@ -2611,14 +2810,17 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
 
       {/* Info count */}
       {soalList.length > 0 && (
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-sm font-bold" style={{ color: "#003082" }}>{soalList.length} soal ditemukan</span>
-          {["Pilihan Ganda","Pilihan Ganda Kompleks","Benar/Salah Kompleks","Uraian/Esai"].map(j => {
-            const c = soalList.filter(s => s.jenisSoal === j).length;
-            if (!c) return null;
-            const bj = badgeJenis[j] || {};
-            return <span key={j} className="text-xs font-bold px-2 py-0.5" style={{ background: bj.bg, color: bj.color, border: `1px solid ${bj.border}`, borderRadius: "0" }}>{j}: {c}</span>;
-          })}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-bold" style={{ color: "#003082" }}>{soalList.length} soal ditemukan</span>
+            {["Pilihan Ganda","Pilihan Ganda Kompleks","Benar/Salah Kompleks","Uraian/Esai"].map(j => {
+              const c = soalList.filter(s => s.jenisSoal === j).length;
+              if (!c) return null;
+              const bj = badgeJenis[j] || {};
+              return <span key={j} className="text-xs font-bold px-2 py-0.5" style={{ background: bj.bg, color: bj.color, border: `1px solid ${bj.border}`, borderRadius: "0" }}>{j}: {c}</span>;
+            })}
+          </div>
+          <button onClick={() => setHapusSemuaConfirm(true)} className={btn("red")}>🗑 Hapus Semua Soal Sesuai Filter</button>
         </div>
       )}
 
@@ -2822,6 +3024,32 @@ function TabViewSoal({ scriptUrl, addToast, mapelList, asesmenList, ns="" }) {
           </div>
         </div>
       )}
+
+      {/* Konfirmasi hapus semua soal sesuai filter */}
+      {hapusSemuaConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm p-6 shadow-2xl" style={{ border: "2px solid #CC0000", borderRadius: "0" }}>
+            <p className="font-black text-lg mb-1" style={{ color: "#CC0000" }}>🗑 Hapus Semua Soal Sesuai Filter?</p>
+            <p className="text-sm text-slate-600 mb-1">Seluruh soal di bawah ini akan dihapus permanen dan tidak dapat dikembalikan:</p>
+            <div className="p-3 mb-4 text-sm space-y-1" style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "0" }}>
+              <p className="font-bold text-slate-800">{soalList.length} soal</p>
+              <p className="text-slate-600">Mapel: <strong>{filterMapel}</strong> — Asesmen: <strong>{filterAsesmen}</strong></p>
+            </div>
+            {deletingSemua && (
+              <div className="mb-4">
+                <div className="h-2 bg-slate-100 overflow-hidden" style={{ borderRadius: "0" }}>
+                  <div className="h-full bg-red-600 transition-all" style={{ width: `${progressHapusSemua.total ? (progressHapusSemua.done/progressHapusSemua.total)*100 : 0}%` }} />
+                </div>
+                <p className="text-xs text-slate-500 mt-1 text-center">Menghapus {progressHapusSemua.done}/{progressHapusSemua.total}...</p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setHapusSemuaConfirm(false)} disabled={deletingSemua} className={btn("slate") + " flex-1 disabled:opacity-50"}>Batal</button>
+              <button onClick={handleHapusSemuaSoal} disabled={deletingSemua} className={btn("red") + " flex-1 disabled:opacity-50"}>{deletingSemua ? "Menghapus..." : "Ya, Hapus Semua"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2844,6 +3072,28 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings
   const [bobotSaving, setBobotSaving] = useState(false);
   const [konfirmHapus, setKonfirmHapus] = useState(null);
   const [deletingHasil, setDeletingHasil] = useState(false);
+  const [konfirmHapusSemua, setKonfirmHapusSemua] = useState(false);
+  const [deletingSemua, setDeletingSemua] = useState(false);
+  const [progressHapusSemua, setProgressHapusSemua] = useState({ total: 0, done: 0 });
+
+  const handleHapusSemuaFiltered = async () => {
+    if (filtered.length === 0) return;
+    setDeletingSemua(true);
+    setProgressHapusSemua({ total: filtered.length, done: 0 });
+    let sukses = 0, gagal = 0;
+    const berhasilDihapus = [];
+    for (const h of filtered) {
+      try {
+        const d = await FS.hapusHasil({ nisn: h.nisn, mapel: h.mapel, asesmen: h.asesmen, waktu: h.waktu }, ns);
+        if (d.status === "success") { sukses++; berhasilDihapus.push(h); } else gagal++;
+      } catch { gagal++; }
+      setProgressHapusSemua(p => ({ ...p, done: p.done + 1 }));
+    }
+    setHasil(prev => prev.filter(h => !berhasilDihapus.some(x => x.nisn === h.nisn && x.mapel === h.mapel && x.asesmen === h.asesmen && x.waktu === h.waktu)));
+    setKonfirmHapusSemua(false);
+    setDeletingSemua(false);
+    addToast(`✅ Hapus selesai: ${sukses} data berhasil dihapus${gagal > 0 ? `, ${gagal} gagal` : ""}.`, sukses > 0 ? "success" : "error");
+  };
 
   const handleHapusHasil = async () => {
     if (!konfirmHapus) return;
@@ -2981,6 +3231,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => fetchHasil(filterMapel)} className={btn("slate")}>🔄 Refresh</button>
           <button onClick={handleExportXLSX} disabled={exporting || filtered.length===0} className={btn("green") + " disabled:opacity-50"}>{exporting ? "Mengekspor..." : "📥 Export XLSX"}</button>
+          <button onClick={() => setKonfirmHapusSemua(true)} disabled={filtered.length===0} className={btn("red") + " disabled:opacity-50"}>🗑 Hapus Semua Sesuai Filter</button>
         </div>
       </div>
 
@@ -3159,6 +3410,30 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings
             <div className="flex gap-3">
               <button onClick={() => setKonfirmHapus(null)} className={btn("slate") + " flex-1"}>Batal</button>
               <button onClick={handleHapusHasil} disabled={deletingHasil} className={btn("red") + " flex-1"}>{deletingHasil ? "Menghapus..." : "Ya, Hapus"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {konfirmHapusSemua && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm p-6 shadow-2xl" style={{ border: "2px solid #CC0000", borderRadius: "0" }}>
+            <p className="font-black text-lg mb-1" style={{ color: "#CC0000" }}>🗑 Hapus Semua Data Sesuai Filter?</p>
+            <p className="text-sm text-slate-600 mb-1">Seluruh data hasil di bawah ini akan dihapus permanen dan tidak dapat dikembalikan:</p>
+            <div className="p-3 mb-4 text-sm space-y-1" style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "0" }}>
+              <p className="font-bold text-slate-800">{filtered.length} data hasil ujian</p>
+              <p className="text-slate-600">Mapel: <strong>{filterMapel}</strong> — Asesmen: <strong>{filterAsesmen}</strong>{search ? <> — Pencarian: <strong>"{search}"</strong></> : null}</p>
+            </div>
+            {deletingSemua && (
+              <div className="mb-4">
+                <div className="h-2 bg-slate-100 overflow-hidden" style={{ borderRadius: "0" }}>
+                  <div className="h-full bg-red-600 transition-all" style={{ width: `${progressHapusSemua.total ? (progressHapusSemua.done/progressHapusSemua.total)*100 : 0}%` }} />
+                </div>
+                <p className="text-xs text-slate-500 mt-1 text-center">Menghapus {progressHapusSemua.done}/{progressHapusSemua.total}...</p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => setKonfirmHapusSemua(false)} disabled={deletingSemua} className={btn("slate") + " flex-1 disabled:opacity-50"}>Batal</button>
+              <button onClick={handleHapusSemuaFiltered} disabled={deletingSemua} className={btn("red") + " flex-1 disabled:opacity-50"}>{deletingSemua ? "Menghapus..." : "Ya, Hapus Semua"}</button>
             </div>
           </div>
         </div>
@@ -4684,11 +4959,31 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
 }
 
 // ============================================================
+// SESI LOGIN — persist ke localStorage agar tidak logout saat refresh
+// ============================================================
+const SESI_KEY = "sesiAktifApp";
+function loadSesiAktif() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESI_KEY) || "null");
+    if (s && s.mode === "guru" && s.kelasAktif) return s;
+    if (s && s.mode === "admin") return s;
+  } catch {}
+  return null;
+}
+function saveSesiAktif(s) {
+  try {
+    if (s) localStorage.setItem(SESI_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SESI_KEY);
+  } catch {}
+}
+
+// ============================================================
 // APP UTAMA
 // ============================================================
 export default function App() {
   const { toasts, addToast } = useToast();
-  const [mode, setMode] = useState("siswa");
+  const sesiAwal = loadSesiAktif();
+  const [mode, setMode] = useState(sesiAwal?.mode || "siswa");
   const [siswa, setSiswa] = useState(null);
   const [settings, setSettings] = useState(() => { try { return JSON.parse(localStorage.getItem("appSettings") || "{}"); } catch { return {}; } });
   const [mapelList, setMapelList] = useState([...DEFAULT_MAPEL]);
@@ -4721,7 +5016,7 @@ export default function App() {
     }).catch(()=>{});
   }, []);
   
-  const [kelasAktif, setKelasAktif] = useState(null);
+  const [kelasAktif, setKelasAktif] = useState(sesiAwal?.mode === "guru" ? sesiAwal.kelasAktif : null);
 
   // Sync daftar kelas dari Firestore ke localStorage saat App pertama load
   // Agar cariKelasByPassword selalu pakai data terbaru
@@ -4736,8 +5031,10 @@ export default function App() {
   const saveSettings = s => { setSettings(s); try { localStorage.setItem("appSettings", JSON.stringify(s)); } catch {} };
   const handleMulaiUjian = async (data) => { setSiswa(data); setMode("ujian"); try { const el = document.documentElement; if (el.requestFullscreen) await el.requestFullscreen(); else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen(); } catch {} };
   const handleSelesaiUjian = async () => { setSiswa(null); setMode("siswa"); try { if (document.fullscreenElement || document.webkitFullscreenElement) { if (document.exitFullscreen) await document.exitFullscreen(); else if (document.webkitExitFullscreen) await document.webkitExitFullscreen(); } } catch {} };
-  const handleGuruLogin = (kelas) => { setKelasAktif(kelas); setMode("guru"); };
-  const handleGuruLogout = () => { setKelasAktif(null); setMode("siswa"); };
+  const handleGuruLogin = (kelas) => { setKelasAktif(kelas); setMode("guru"); saveSesiAktif({ mode: "guru", kelasAktif: kelas }); };
+  const handleGuruLogout = () => { setKelasAktif(null); setMode("siswa"); saveSesiAktif(null); };
+  const handleAdminLogin = () => { setMode("admin"); saveSesiAktif({ mode: "admin" }); };
+  const handleAdminLogout = () => { setMode("siswa"); saveSesiAktif(null); };
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -4748,8 +5045,8 @@ export default function App() {
         {mode === "ujian" && siswa && <HalamanUjian siswa={siswa} addToast={addToast} onSelesai={handleSelesaiUjian} ns={siswa?.ns ?? ""} durasiMenit={settings.durasiMenit || 60} namaGuru={settings.namaGuru || ""} nipGuru={settings.nipGuru || ""} kotaTTD={settings.kotaTTD || ""} namaSekolah={settings.namaSekolah || ""} />}
         {mode === "guruLogin" && <GuruLogin onLogin={handleGuruLogin} />}
         {mode === "guru" && kelasAktif && <GuruPanel addToast={addToast} onLogout={handleGuruLogout} settings={settings} onSaveSettings={saveSettings} mapelList={mapelList} setMapelList={handleSetMapelList} asesmenList={asesmenList} setAsesmenList={handleSetAsesmenList} kelasAktif={kelasAktif} />}
-        {mode === "adminLogin" && <AdminLogin onLogin={() => setMode("admin")} onBack={() => setMode("siswa")} />}
-        {mode === "admin" && <AdminPanel addToast={addToast} onLogout={() => setMode("siswa")} />}
+        {mode === "adminLogin" && <AdminLogin onLogin={handleAdminLogin} onBack={() => setMode("siswa")} />}
+        {mode === "admin" && <AdminPanel addToast={addToast} onLogout={handleAdminLogout} />}
       </main>
     </div>
   );
