@@ -4418,29 +4418,105 @@ function RenderHTML({ html, className = "" }) {
 // ============================================================
 // HALAMAN UJIAN (HalamanUjian)
 // ============================================================
+// ============================================================
+// PROGRES UJIAN LOKAL — jaring pengaman saat jaringan bermasalah
+// Jawaban & status pengiriman disimpan di localStorage per siswa/token,
+// dan HANYA dihapus setelah server mengonfirmasi hasil berhasil masuk.
+// ============================================================
+function progresKeyUjian(siswa, ns) {
+  return `ujianProgress_${ns || ""}_${siswa?.token || ""}_${siswa?.nisn || siswa?.nama || ""}`;
+}
+function loadProgresUjian(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "null"); } catch { return null; }
+}
+function saveProgresUjian(key, data) {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
+}
+function clearProgresUjian(key) {
+  try { localStorage.removeItem(key); } catch {}
+}
+
 function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGuru, kotaTTD, namaSekolah, ns="" }) {
   // Gunakan ns dari object siswa jika ada (siswa login langsung), atau dari prop
   const nsEfektif = siswa?.ns ?? ns;
+  const progKey = progresKeyUjian(siswa, nsEfektif);
+  // Baca progres lokal SEKALI di render pertama — dipakai untuk memulihkan state awal
+  const savedProgressRef = useRef(loadProgresUjian(progKey));
+  const saved = savedProgressRef.current;
+  const sudahDikumpulkanLokal = !!(saved && saved.submittedLocally);
+
   const [soalList, setSoalList] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [currentIdx, setCurrentIdx] = useState(0);
-  const [jawaban, setJawaban] = useState({});
-  const [tabViolation, setTabViolation] = useState(0);
+  const [currentIdx, setCurrentIdx] = useState(() => (saved && !sudahDikumpulkanLokal) ? (saved.currentIdx || 0) : 0);
+  const [jawaban, setJawaban] = useState(() => (saved && saved.jawaban) ? saved.jawaban : {});
+  const [tabViolation, setTabViolation] = useState(() => (saved && !sudahDikumpulkanLokal) ? (saved.tabViolation || 0) : 0);
   const [diskualifikasi, setDiskualifikasi] = useState(false);
   const [diskualifikasiAlasan, setDiskualifikasiAlasan] = useState("tab");
   const durasiDetik = (Number(durasiMenit) || 60) * 60;
-  const [waktu, setWaktu] = useState(durasiDetik);
-  const [submitted, setSubmitted] = useState(false);
-  const [hasilAkhir, setHasilAkhir] = useState(null);
+  const [waktu, setWaktu] = useState(() => (saved && !sudahDikumpulkanLokal && typeof saved.waktu === "number") ? saved.waktu : durasiDetik);
+  const [submitted, setSubmitted] = useState(sudahDikumpulkanLokal);
+  const [hasilAkhir, setHasilAkhir] = useState(() => sudahDikumpulkanLokal ? saved.hasilAkhir : null);
+  // Status pengiriman hasil ke server: idle | mengirim | gagal | terkirim
+  const [syncStatus, setSyncStatus] = useState("idle");
   const timerRef = useRef(null);
   const MAX_VIOLATION = 3;
 
-  const [showKonfirmasi, setShowKonfirmasi] = useState(true);
-  const [ujianDimulai, setUjianDimulai] = useState(false);
-  const violationCountRef = useRef(0);
+  const [showKonfirmasi, setShowKonfirmasi] = useState(!saved);
+  const [ujianDimulai, setUjianDimulai] = useState(!!saved);
+  const violationCountRef = useRef((saved && !sudahDikumpulkanLokal) ? (saved.tabViolation || 0) : 0);
 
-  // Fetch soal dari server
+  // Kirim hasil ke server. Progres lokal HANYA dihapus jika benar-benar sukses;
+  // kalau gagal, jawaban & payload tetap tersimpan supaya bisa dikirim ulang.
+  const kirimHasilKeServer = useCallback(async (payload) => {
+    setSyncStatus("mengirim");
+    try {
+      await FS.simpanHasil(payload, nsEfektif);
+      setSyncStatus("terkirim");
+      clearProgresUjian(progKey);
+    } catch {
+      setSyncStatus("gagal");
+    }
+  }, [nsEfektif, progKey]);
+
+  // Saat komponen dibuka: kalau ada hasil yang sudah dihitung tapi belum terkonfirmasi
+  // terkirim (mis. sebelumnya jaringan putus tepat saat submit), coba kirim ulang otomatis.
+  // Kalau progres masih berupa jawaban yang sedang dikerjakan, beri tahu siswa progresnya dipulihkan.
   useEffect(() => {
+    if (sudahDikumpulkanLokal && saved?.payloadKirim) {
+      kirimHasilKeServer(saved.payloadKirim);
+    } else if (saved && !sudahDikumpulkanLokal) {
+      addToast("Jawaban sebelumnya berhasil dipulihkan dari perangkat ini.", "success");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Coba kirim ulang otomatis begitu koneksi internet pulih
+  useEffect(() => {
+    const onOnline = () => {
+      const p = loadProgresUjian(progKey);
+      if (syncStatus === "gagal" && p?.payloadKirim) kirimHasilKeServer(p.payloadKirim);
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [syncStatus, progKey, kirimHasilKeServer]);
+
+  // Peringatkan siswa kalau mencoba menutup halaman padahal hasil belum sukses terkirim
+  useEffect(() => {
+    if (syncStatus !== "gagal") return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [syncStatus]);
+
+  const handleKirimUlang = () => {
+    const p = loadProgresUjian(progKey);
+    if (p?.payloadKirim) kirimHasilKeServer(p.payloadKirim);
+    else if (hasilAkhir) addToast("Data pengiriman tidak ditemukan, silakan hubungi guru.", "error");
+  };
+
+  // Fetch soal dari server (dilewati jika sesi ini sudah dikumpulkan sebelumnya secara lokal)
+  useEffect(() => {
+    if (sudahDikumpulkanLokal) { setLoading(false); return; }
     const fetchSoal = async () => {
       setLoading(true);
       try {
@@ -4452,6 +4528,17 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
     };
     fetchSoal();
   }, []);
+
+  // Autosave: setiap jawaban/posisi/waktu/pelanggaran berubah, simpan ke localStorage
+  // supaya kalau koneksi putus / tab reload, siswa tidak perlu mengulang dari awal.
+  useEffect(() => {
+    if (!ujianDimulai || submitted || diskualifikasi) return;
+    saveProgresUjian(progKey, {
+      jawaban, currentIdx, waktu, tabViolation,
+      submittedLocally: false,
+      savedAt: Date.now()
+    });
+  }, [jawaban, currentIdx, waktu, tabViolation, ujianDimulai, submitted, diskualifikasi, progKey]);
 
   // Timer ujian
   useEffect(() => {
@@ -4498,6 +4585,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
         setDiskualifikasiAlasan(alasan);
         setDiskualifikasi(true);
         clearInterval(timerRef.current);
+        clearProgresUjian(progKey);
         addToast("Sesi ujian diakhiri. Kamu telah diskualifikasi!", "error");
       } else {
         addToast(`⚠️ Peringatan ${count}/${MAX_VIOLATION}: ${
@@ -4599,27 +4687,39 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
     if (submitted) return;
     clearInterval(timerRef.current);
     const { nilai, didapatPoint, totalPoint, detail, adaEsai } = hitungNilai();
-    setHasilAkhir({ nilai, didapatPoint, totalPoint, detail, adaEsai });
+    const hasil = { nilai, didapatPoint, totalPoint, detail, adaEsai };
+    setHasilAkhir(hasil);
     setSubmitted(true);
 
     const jawabanEsaiList = soalList
       .filter(s => s.jenisSoal === "Uraian/Esai")
       .map((s) => ({ soal: s.soal, referensi: s.jawabanReferensi || "", jawaban: jawaban[s.id] || "" }));
 
-    try {
-      // Simpan detail jawaban per soal agar bisa dipakai untuk PDF guru
-      const detailJawaban = {};
-      soalList.forEach(s => { detailJawaban[s.id] = { jawaban: jawaban[s.id]||[], jenis: s.jenisSoal, soal: s.soal||"", opsi: s.opsi||"[]", jawabanBenar: s.jawabanBenar||"[]", point: s.point||0 }; });
-      await FS.simpanHasil({
-        nama: siswa.nama, nisn: siswa.nisn, noAbsen: siswa.noAbsen,
-        mapel: siswa.mapel, asesmen: siswa.asesmen,
-        nilai, adaEsai,
-        jawabanEsai: adaEsai ? JSON.stringify(jawabanEsaiList) : "",
-        detailJawaban: JSON.stringify(detailJawaban),
-        token: siswa.token,
-        waktu: new Date().toLocaleString("id-ID")
-      }, nsEfektif);
-    } catch { /* gagal simpan — log saja */ }
+    // Simpan detail jawaban per soal agar bisa dipakai untuk PDF guru
+    const detailJawaban = {};
+    soalList.forEach(s => { detailJawaban[s.id] = { jawaban: jawaban[s.id]||[], jenis: s.jenisSoal, soal: s.soal||"", opsi: s.opsi||"[]", jawabanBenar: s.jawabanBenar||"[]", point: s.point||0 }; });
+    const payload = {
+      nama: siswa.nama, nisn: siswa.nisn, noAbsen: siswa.noAbsen,
+      mapel: siswa.mapel, asesmen: siswa.asesmen,
+      nilai, adaEsai,
+      jawabanEsai: adaEsai ? JSON.stringify(jawabanEsaiList) : "",
+      detailJawaban: JSON.stringify(detailJawaban),
+      token: siswa.token,
+      waktu: new Date().toLocaleString("id-ID")
+    };
+
+    // Simpan jawaban + payload ke localStorage SEBELUM mencoba kirim.
+    // Kalau pengiriman gagal, data ini tetap ada untuk dikirim ulang (manual/otomatis)
+    // dan hanya akan dihapus setelah server benar-benar mengonfirmasi sukses.
+    saveProgresUjian(progKey, {
+      jawaban, currentIdx, tabViolation,
+      submittedLocally: true,
+      hasilAkhir: hasil,
+      payloadKirim: payload,
+      savedAt: Date.now()
+    });
+
+    await kirimHasilKeServer(payload);
     if (!autoSubmit) addToast("Ujian berhasil dikumpulkan! 🎉", "success");
   };
 
@@ -4758,6 +4858,29 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
                 ✏️ <strong>Ada soal uraian</strong> — nilai akhir akan diperbarui setelah guru mengoreksi jawaban esaimu.
               </div>
             )}
+
+            {/* Status pengiriman hasil ke server */}
+            {syncStatus === "mengirim" && (
+              <div className="p-3 text-xs text-center flex items-center justify-center gap-2" style={{ background: "#eff6ff", border: "1px solid #93c5fd", color: "#003082", borderRadius: "0" }}>
+                <span className="w-3 h-3 border-2 border-blue-300 border-t-blue-700 rounded-full animate-spin inline-block"></span> Mengirim hasil ke server...
+              </div>
+            )}
+            {syncStatus === "terkirim" && (
+              <div className="p-3 text-xs text-center font-bold" style={{ background: "#f0fdf4", border: "1px solid #86efac", color: "#15803d", borderRadius: "0" }}>
+                ✅ Hasil berhasil tersimpan di server.
+              </div>
+            )}
+            {syncStatus === "gagal" && (
+              <div className="space-y-2">
+                <div className="p-3 text-xs text-center" style={{ background: "#fef2f2", border: "1px solid #fca5a5", color: "#CC0000", borderRadius: "0" }}>
+                  ⚠️ Hasil <strong>belum</strong> berhasil terkirim ke server (jaringan bermasalah). Jangan khawatir — jawabanmu masih aman tersimpan di perangkat ini. Jangan tutup halaman ini sebelum berhasil terkirim.
+                </div>
+                <button onClick={handleKirimUlang} className="w-full text-white font-bold py-3 transition-all shadow-md" style={{ background: "#CC0000", borderRadius: "0" }}>
+                  🔄 Kirim Ulang ke Server
+                </button>
+              </div>
+            )}
+
             <button onClick={handleUnduhPDF} disabled={pdfLoading} className="w-full text-white font-bold py-3 transition-all shadow-md flex items-center justify-center gap-2 text-sm disabled:opacity-60" style={{ background: "#003082", borderRadius: "0" }}>
               {pdfLoading ? <><span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin inline-block"></span> Membuat PDF...</> : <>📥 Download PDF Hasil</>}
             </button>
