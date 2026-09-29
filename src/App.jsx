@@ -447,7 +447,7 @@ async function unduhPDF({ siswa, hasilAkhir, soalList, jawabanSiswa, namaGuru, n
 }
 
 // PDF gabungan untuk guru (dari rekap hasil) — objektif + uraian
-async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah }) {
+async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah, bobotObj = 80, bobotEsai = 20 }) {
   if (!window.jspdf) {
     await new Promise((res, rej) => {
       const s = document.createElement("script");
@@ -495,9 +495,9 @@ async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah }) 
     const esai = (h.skorEsai!==undefined && h.skorEsai!=="") ? Number(h.skorEsai) : null;
     const adaEsai = h.adaEsai==="TRUE"||h.adaEsai===true||(h.jawabanEsai&&h.jawabanEsai!==""&&h.jawabanEsai!=="[]");
     if (!adaEsai||esai===null) return obj;
-    // Ambil bobot dari nilaiAkhir jika sudah tersimpan, atau hitung dari bobot default 80/20
-    if (h.nilaiAkhir!==undefined && h.nilaiAkhir!=="") return Number(h.nilaiAkhir);
-    return Math.round(obj*0.8 + esai*0.2);
+    // Selalu hitung ulang memakai bobot terbaru (sama dengan tabel Rekap Hasil),
+    // bukan nilaiAkhir lama yang tersimpan saat koreksi.
+    return Math.round(obj*(Number(bobotObj)/100) + esai*(Number(bobotEsai)/100));
   })();
   const predikat = nilaiAkhir>=86?"Mahir":nilaiAkhir>=66?"Cakap":nilaiAkhir>=41?"Berkembang":"Perlu Bimbingan";
   const nilaiRGB = nilaiAkhir>=75?[22,163,74]:nilaiAkhir>=50?[217,119,6]:[220,38,38];
@@ -3278,7 +3278,7 @@ function TabRekap({ scriptUrl, addToast, mapelList, asesmenList, ns="", settings
                   <td className="px-2 py-2 text-center" style={{ whiteSpace:"nowrap" }}>
                     <div className="flex items-center justify-center gap-1" style={{ flexWrap:"nowrap" }}>
                       <button
-                        onClick={async () => { try { await unduhPDFGabungan({ h, namaGuru: settings.namaGuru||"", nipGuru: settings.nipGuru||"", kotaTTD: settings.kotaTTD||"", namaSekolah: settings.namaSekolah||"" }); } catch(e) { addToast("Gagal download PDF: "+e.message, "error"); } }}
+                        onClick={async () => { try { await unduhPDFGabungan({ h, namaGuru: settings.namaGuru||"", nipGuru: settings.nipGuru||"", kotaTTD: settings.kotaTTD||"", namaSekolah: settings.namaSekolah||"", bobotObj, bobotEsai }); } catch(e) { addToast("Gagal download PDF: "+e.message, "error"); } }}
                         className="text-xs font-bold px-2 py-1"
                         style={{ background:"#eff6ff", color:"#003082", borderRadius:"0", border:"1px solid #93c5fd" }}
                         title="Download PDF">📥</button>
