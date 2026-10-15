@@ -549,7 +549,7 @@ async function unduhPDFGabungan({ h, namaGuru, nipGuru, kotaTTD, namaSekolah, bo
       if (d.jenis === "Pilihan Ganda") {
         dapat = (benarArr.length>0 && jwbSiswa[0]===benarArr[0]) ? maks : 0;
       } else if (d.jenis === "Pilihan Ganda Kompleks") {
-        if (benarArr.length>0) { const benar=jwbSiswa.filter(j=>benarArr.includes(j)).length; const salah=jwbSiswa.filter(j=>!benarArr.includes(j)).length; dapat=salah>0?0:Math.round((benar/benarArr.length)*maks); }
+        if (benarArr.length>0) { const benar=jwbSiswa.filter(j=>benarArr.includes(j)).length; const salah=jwbSiswa.filter(j=>!benarArr.includes(j)).length; dapat=(salah===0 && benar===benarArr.length)?maks:0; }
       } else if (d.jenis === "Benar/Salah Kompleks") {
         if (benarArr.length>0) { const benar=jwbSiswa.filter((j,ii)=>j===benarArr[ii]).length; dapat=benar===benarArr.length?maks:benar>0?Math.round((benar/benarArr.length)*maks):0; }
       }
@@ -4661,11 +4661,13 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
         const opsiAll = JSON.parse(s.opsi || "[]");
         const jml = opsiAll.length;
         if (!jml) return;
+        // PGK: tanpa nilai parsial. Poin penuh hanya jika SEMUA opsi sesuai kunci, selain itu 0.
         let skor = 0;
         opsiAll.forEach(o => { const t = getOpsiText(o); if (benar.includes(t) === jwb.includes(t)) skor++; });
-        const dapat = Math.round((pt * skor / jml) * 100) / 100;
+        const sesuaiKunci = skor === jml;
+        const dapat = sesuaiKunci ? pt : 0;
         didapatPoint += dapat;
-        detail.push({ no: idx + 1, jenis: "PGK", dapat, max: pt, ket: `${skor}/${jml} opsi tepat` });
+        detail.push({ no: idx + 1, jenis: "PGK", dapat, max: pt, ket: sesuaiKunci ? "Benar" : "Salah (tidak sesuai kunci)" });
       } else {
         const jml = benar.length;
         if (!jml) return;
@@ -4982,7 +4984,7 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
         {/* Pilihan Ganda Kompleks */}
         {soal.jenisSoal === "Pilihan Ganda Kompleks" && (
           <div className="space-y-2">
-            <p className="text-xs font-bold mb-2 px-3 py-1.5" style={{ color: "#003082", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: "0" }}>✅ Pilih SEMUA jawaban yang benar — skor parsial per opsi</p>
+            <p className="text-xs font-bold mb-2 px-3 py-1.5" style={{ color: "#003082", background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: "0" }}>✅ Pilih SEMUA jawaban yang benar — poin hanya diberikan jika semua pilihan sesuai kunci</p>
             {opsiList.map((o, i) => {
               const oText = getOpsiText(o);
               const oImg = getOpsiImg(o);
