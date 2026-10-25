@@ -1174,6 +1174,7 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
   const [tokenValue, setTokenValue] = useState("");
   const [daftarToken, setDaftarToken] = useState([]);
   const [loadToken, setLoadToken] = useState(false);
+  const [filterTokenMapel, setFilterTokenMapel] = useState(""); // "" = belum pilih, "__ALL__" = semua
   // KKTP global
   const [kktp, setKktp] = useState({ pb: 40, bk: 65, ck: 85 });
   const [kktpLoading, setKktpLoading] = useState(false);
@@ -1446,11 +1447,24 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
         
         <div>
           <div className="flex items-center justify-between mb-2"><p className="text-xs font-bold text-slate-600 uppercase">Daftar Token Aktif</p><button onClick={fetchToken} className="text-xs" style={{ color: "#003082" }}>🔄 Refresh</button></div>
-          {loadToken ? <p className="text-xs text-slate-400">Memuat...</p> : daftarToken.length === 0 ? <p className="text-xs text-slate-400">Belum ada token</p> : (
+          {loadToken ? <p className="text-xs text-slate-400">Memuat...</p> : daftarToken.length === 0 ? <p className="text-xs text-slate-400">Belum ada token</p> : (<>
+            <div className="mb-3">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Pilih Mapel</label>
+              <select value={filterTokenMapel} onChange={e => setFilterTokenMapel(e.target.value)} className={inp + " md:max-w-sm"}>
+                <option value="">— Pilih mapel untuk melihat token —</option>
+                <option value="__ALL__">Semua Mapel ({daftarToken.length} token)</option>
+                {[...new Set(daftarToken.map(t => t.mapel))].map(m => (
+                  <option key={m} value={m}>{m} ({daftarToken.filter(t => t.mapel === m).length} token)</option>
+                ))}
+              </select>
+            </div>
+            {!filterTokenMapel ? (
+              <p className="text-xs text-slate-400 text-center py-4" style={{ border: "1px dashed #cbd5e1" }}>👆 Pilih mapel terlebih dahulu untuk menampilkan daftar token</p>
+            ) : (
             <div className="overflow-x-auto" style={{ border: "1px solid #e2e8f0", borderRadius: "0" }}>
               <table className="w-full text-xs">
                 <thead><tr style={{ background: "#003082" }} className="text-white"><th className="px-3 py-2 text-left">Mapel</th><th className="px-3 py-2 text-left">Asesmen</th><th className="px-3 py-2 text-left">Token</th><th className="px-3 py-2 text-center">Status</th><th className="px-3 py-2 text-center">Edit</th><th className="px-3 py-2 text-center">Hapus</th></tr></thead>
-                <tbody>{daftarToken.map((t, i) => (
+                <tbody>{daftarToken.filter(t => filterTokenMapel === "__ALL__" || t.mapel === filterTokenMapel).map((t, i) => (
                   <tr key={i} style={{ background: i%2===0 ? "#fff" : "#f8fafc" }}>
                     <td className="px-3 py-2">{t.mapel}</td>
                     <td className="px-3 py-2">{t.asesmen}</td>
@@ -1471,7 +1485,8 @@ function TabMapel({ scriptUrl, addToast, mapelList, setMapelList, asesmenList, s
                 ))}</tbody>
               </table>
             </div>
-          )}
+            )}
+          </>)}
         </div>
       </div>
 
