@@ -4945,15 +4945,15 @@ function HalamanUjian({ siswa, addToast, onSelesai, durasiMenit, namaGuru, nipGu
           )}
         </div>
 
+        {/* Gambar soal — di atas teks soal, tepat di bawah nomor */}
+        {soal.gambar && soal.gambar.trim() && (
+          <div className="px-4 pb-3"><GambarSoal url={soal.gambar} alt="Gambar soal" /></div>
+        )}
+
         {/* Teks soal — full width, tidak disempitkan oleh nomor di samping */}
         <div className="px-4 pb-3 text-slate-800 font-medium leading-relaxed prose prose-sm max-w-none text-base">
           <RenderHTML html={soal.soal} />
         </div>
-
-        {/* Gambar soal */}
-        {soal.gambar && soal.gambar.trim() && (
-          <div className="px-4 pb-4"><GambarSoal url={soal.gambar} alt="Gambar soal" /></div>
-        )}
 
         {/* Separator tipis sebelum opsi */}
         <div style={{ borderTop: "1px solid #f1f5f9" }} />
